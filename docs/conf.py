@@ -7,8 +7,8 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'python-epub3'
-copyright = '2023, ChenyangGao <https://chenyanggao.github.io/>'
-author = 'ChenyangGao <https://chenyanggao.github.io/>'
+copyright = '2023, ChenyangGao <https://chenyanggao.github.io>'
+author = 'ChenyangGao <https://chenyanggao.github.io>'
 release = '0.0.1'
 
 # -- General configuration ---------------------------------------------------

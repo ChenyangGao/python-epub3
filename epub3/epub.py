@@ -36,7 +36,7 @@ from weakref import WeakKeyDictionary, WeakValueDictionary
 from zipfile import ZipFile, ZIP_DEFLATED
 
 from .util.helper import items, wrap_open_in_bytes
-from .util.proxy import ElementAttribProxy, ElementProxy
+from .util.proxy import ElementAttribProxy, ElementProxy, NAMESPACES
 from .util.xml import el_add, el_del, el_iterfind, el_set
 from .util.undefined import undefined, UndefinedType
 
@@ -271,7 +271,7 @@ class Item(ElementAttribProxy):
             self.href, 
             mode=mode, 
             buffering=buffering, 
-            encoding=Noencodingne, 
+            encoding=encoding, 
             errors=errors, 
             newline=newline, 
             ensure_path=ensure_path, 
@@ -668,7 +668,8 @@ class Manifest(dict):
                 el.attrib["media-type"] = guess_type(href)[0] or "application/octet-stream"
             if id is None:
                 id = str(uuid4())
-                self[id] = item = Item(el, self)
+                item = Item(el, self)
+                super().__setitem__(id, item)
                 self._href_to_id[href] = id
                 self._href_to_file[href] = FileInEpub(ospath.join(self._workdir.name, id), True)
                 yield item
@@ -728,7 +729,7 @@ class Manifest(dict):
         elif "media-type" not in attrib:
             attrib["media-type"] = guess_type(href)[0] or "application/octet-stream"
         item = Item(el_add(self._root, "item", attrib=attrib, namespaces=NAMESPACES), self)
-        self[id] = item
+        super().__setitem__(id, item)
         self._href_to_id[href] = id
         if internal:
             self._href_to_file[href] = FileInEpub(path, True)
@@ -1019,6 +1020,8 @@ class Spine(dict):
         return Itemref(el_add(self._root, "itemref", attrib=attrib, namespaces=NAMESPACES))
 
     def add(self, id, /, attrib=None):
+        if isinstance(id, Item):
+            id = id.id
         if id not in self._manifest:
             raise LookupError(f"no such id in manifest: {id!r}")
         elif id in self:
@@ -1200,16 +1203,26 @@ class ePub(ElementProxy):
 
     @property
     def cover(self, /) -> Optional[str]:
-        meta = self.metadata.meta('[@name="cover"]')
+        meta = self.metadata.meta(find_attrib={"name": "cover"})
         if meta is None:
             return None
         return meta.get("content")
 
     @cover.setter
     def cover(self, cover_id, /):
+        if isinstance(cover_id, Item):
+            cover_id = cover_id.id
         if cover_id not in self.manifest:
             raise LookupError(f"no such item id: {cover_id!r}")
-        self.metadata.meta('[@name="cover"]', attrib={"content": cover_id}, auto_add=True)
+        self.metadata.meta(find_attrib={"name": "cover"}, attrib={"content": cover_id}, auto_add=True)
+
+    @property
+    def modified(self, /):
+        return self.metadata.meta(
+            find_attrib={"property": "dcterms:modified"}, 
+            text=lambda: datetime.now().strftime("%FT%XZ"), 
+            auto_add=True, 
+        ).text
 
     def pack(
         self, 
@@ -1243,11 +1256,13 @@ class ePub(ElementProxy):
                     bad_ids.add(id)
                     warn(f"can't open {href!r}\n    |_ {type(e).__qualname__}: {e}")
                 else:
-                    with wfile.open(joinpath(opf_dir, href), "w") as fdst:
-                        copyfileobj(fsrc, fdst)
-                    good_ids.add(id)
-                finally:
-                    fsrc.close()
+                    try:
+                        with wfile.open(joinpath(opf_dir, href), "w") as fdst:
+                            copyfileobj(fsrc, fdst)
+                        good_ids.add(id)
+                    finally:
+                        fsrc.close()
+            self.modified
             root = self._root
             if bad_ids:
                 root = deepcopy(root)
