@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "python-epub3"
+version = "0.0.1.4"
+description = "An awsome epub3 library."
+authors = ["ChenyangGao <https://chenyanggao.github.io/>"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/ChenyangGao/python-epub3"
+repository = "https://github.com/ChenyangGao/python-epub3"
+documentation = "https://python-epub3.readthedocs.io"
+keywords = ["epub", "epub3"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+include = [
+    "LICENSE",
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.packages]]
+include = "epub3"
