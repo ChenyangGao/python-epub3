@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-__author__  = "ChenyangGao <https://chenyanggao.github.io/>"
-__all__ = ["get", "items", "posix_glob_translate_iter", "wrap_open_in_bytes"]
+__author__  = "ChenyangGao <https://chenyanggao.github.io>"
+__all__ = ["get", "guess_media_type", "items", "posix_glob_translate_iter"]
 
 from fnmatch import translate as wildcard_translate
-from io import BufferedReader, BufferedWriter, BufferedRandom, TextIOWrapper, DEFAULT_BUFFER_SIZE
-from re import compile as re_compile
-from typing import ItemsView, Iterator, Optional, Mapping
+from mimetypes import guess_type
+from typing import ItemsView, Iterator, Mapping
 
 
 def get(m, /, key, default=None):
@@ -18,6 +17,10 @@ def get(m, /, key, default=None):
             return m[key]
         except LookupError:
             return default
+
+
+def guess_media_type(name: str, /, default: str = "application/octet-stream") -> str:
+    return guess_type(name)[0] or default
 
 
 def items(m, /):
@@ -39,39 +42,4 @@ def posix_glob_translate_iter(pattern: str) -> Iterator[str]:
             yield "[^/]*(?:/[^/]*)*"
         else:
             yield wildcard_translate(part)[4:-3].replace(".*", "[^/]*")
-
-
-def wrap_open_in_bytes(open_in_bytes, /):
-    def open(
-        mode="r", 
-        buffering=-1, 
-        encoding=None, 
-        errors=None, 
-        newline=None, 
-    ):
-        for mode0 in ("r", "w", "a", "x"):
-            if mode0 in mode:
-                break
-        else:
-            raise ValueError(f"invalid open mode: {mode!r}")
-        file = open_in_bytes(mode0 + "+"[:"+" in mode])
-        if "b" in mode and buffering == 0:
-            return file
-        bufsize = buffering if buffering > 1 else DEFAULT_BUFFER_SIZE
-        if "+" in mode:
-            file = BufferedRandom(file, bufsize)
-        elif "r" in mode0:
-            file = BufferedReader(file, bufsize)
-        else:
-            file = BufferedWriter(file, bufsize)
-        if "b" in mode:
-            return file
-        return TextIOWrapper(
-            file, 
-            encoding=encoding, 
-            errors=errors, 
-            newline=newline, 
-            line_buffering=buffering==1, 
-        )
-    return open
 

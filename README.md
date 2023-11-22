@@ -56,7 +56,7 @@ pip install python-epub3
 <Item({'id': '6053413d-b534-4409-9e9f-7a5cf0a74da9', 'href': 'index.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1066e75d0>
 >>> # Add the above file to spine
 >>> book.spine.add(item.id)
-<Itemref({}) at 0x1076de2d0>
+<Itemref({'idref': '6053413d-b534-4409-9e9f-7a5cf0a74da9'}) at 0x1076de2d0>
 >>> # Open the above file and write some textual data
 >>> file = item.open("w")
 >>> file.write('''<?xml version="1.0" encoding="utf-8"?><!DOCTYPE html>
@@ -90,7 +90,20 @@ pip install python-epub3
 
 ## Features
 
-...
+- Proxy underlying XML element nodes to operate on OPF document.
+- Support querying nodes using [ElementPath](https://docs.python.org/3/library/xml.etree.elementtree.html#supported-xpath-syntax).
+- Manifest supports file system interfaces, referenced [os.path](https://docs.python.org/3/library/os.path.html), [shutil](https://docs.python.org/3/library/shutil.html), [pathlib.Path](https://docs.python.org/3/library/pathlib.html#pathlib.Path).
+- Numerous lazy loading features, just like [Occam's razor](https://en.wikipedia.org/wiki/Occam%27s_razor).
+    > Entities should not be multiplied unnecessarily.  
+    > <span style="text-align: right; display: block">-- **Occam's razor**</span>
+
+    > We are to admit no more causes of natural things than such as are both true and sufficient to explain their appearances.  
+    > <span style="text-align: right; display: block">-- **Isaac Newton**</span>
+
+    > Everything should be made as simple as possible, but no simpler.
+    > <span style="text-align: right; display: block">-- **Albert Einstein**</span>
+- Caching instance, not created repeatedly, and recycled in a timely manner.
+- Allow adding any openable files, as long as there is an open method and its parameters are compatible with [open](https://docs.python.org/3/library/functions.html#open).
 
 ## Documentation
 

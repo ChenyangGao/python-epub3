@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-__author__  = "ChenyangGao <https://chenyanggao.github.io/>"
+__author__  = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = ["fromstring", "to_xhtml", "iterfind", "xpath", "elementpath_of", "xpath_of"]
 
 from functools import partial

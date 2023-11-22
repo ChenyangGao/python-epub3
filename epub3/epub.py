@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-__author__  = "ChenyangGao <https://chenyanggao.github.io/>"
+__author__  = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 1)
 __all__ = ["ePub", "Metadata", "Manifest", "Item", "Spine", "Itemref"]
 
@@ -17,8 +17,6 @@ from fnmatch import translate as wildcard_translate
 from functools import cached_property, partial
 from inspect import isclass
 from io import IOBase, TextIOWrapper
-from itertools import permutations, product
-from mimetypes import guess_type
 from operator import methodcaller
 from os import fsdecode, remove, stat, stat_result, PathLike
 from pathlib import PurePosixPath
@@ -27,16 +25,17 @@ from pprint import pformat
 from re import compile as re_compile, escape as re_escape, Pattern
 from shutil import copy, copyfileobj
 from tempfile import TemporaryDirectory
-from time import mktime
-from typing import Any, Callable, Mapping, MutableMapping, Optional
+from typing import cast, Any, Callable, Mapping, MutableMapping, Optional
 from types import MappingProxyType
 from uuid import uuid4
 from warnings import warn
 from weakref import WeakKeyDictionary, WeakValueDictionary
 from zipfile import ZipFile, ZIP_DEFLATED
 
-from .util.helper import items, wrap_open_in_bytes
+from .util.file import File, OPEN_MODES
+from .util.helper import guess_media_type, items
 from .util.proxy import ElementAttribProxy, ElementProxy, NAMESPACES
+from .util.stream import PyLinq
 from .util.xml import el_add, el_del, el_iterfind, el_set
 from .util.undefined import undefined, UndefinedType
 
@@ -46,61 +45,7 @@ except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring, tostring, Element, ElementTree # type: ignore
 
 
-OPEN_MODES = frozenset(
-    "".join(t1) 
-    for t0 in product("rwax", ("", "b", "t"), ("", "+")) 
-    for t1 in permutations(t0, 3)
-)
-
-
-class FileInEpub:
-    __slots__ = ("path", "internal", "open", "stat")
-
-    path: str
-    internal: bool
-    open: Optional[Callable[..., IOBase]]
-    stat: Optional[Callable[[], stat_result]]
-
-    def __init__(
-        self, 
-        /, 
-        path: Optional[str] = None, 
-        internal: bool = False, 
-        open: Optional[Callable[..., IOBase]] = None, 
-        stat: Optional[Callable[[], stat_result]] = None, 
-    ):
-        if not path:
-            if internal:
-                raise ValueError("`path` must be specified if `internal` is True")
-            elif open is None:
-                raise ValueError("`open` must be specified if no `path`")
-        else:
-            if open is None:
-                open = partial(io.open, path)
-            if stat is None:
-                stat = partial(os.stat, path)
-        super().__setattr__("path", path or "")
-        super().__setattr__("internal", internal)
-        super().__setattr__("open", open)
-        super().__setattr__("stat", stat)
-
-    def __fspath__(self, /) -> str:
-        return self.path
-
-    def __repr__(self, /) -> str:
-        cls = type(self)
-        module = cls.__module__
-        name = cls.__qualname__
-        if module != "__main__":
-            name = module + "." + name
-        return f"{name}(path={self.path!r}, internal={self.internal!r}, open={self.open!r}, stat={self.stat!r})"
-
-    def __setattr__(self, attr, value, /):
-        raise TypeError("can't set property")
-
-    @property
-    def name(self, /):
-        return posixpath.basename(self.path)
+TemporaryDirectory.__del__ = TemporaryDirectory.cleanup # type: ignore
 
 
 class Item(ElementAttribProxy):
@@ -108,7 +53,7 @@ class Item(ElementAttribProxy):
     __protected_keys__ = ("href", "media-type")
     __cache_get_state__ = lambda _, manifest: manifest
 
-    def __init__(self, root, manifest, /):
+    def __init__(self, root: Element, manifest, /):
         super().__init__(root)
         self._manifest = manifest
 
@@ -128,6 +73,7 @@ class Item(ElementAttribProxy):
             self.rename(val)
         else:
             super().__setitem__(key, val)
+        return self
 
     @property
     def filename(self, /):
@@ -152,13 +98,13 @@ class Item(ElementAttribProxy):
     @media_type.setter
     def media_type(self, value, /):
         if not value:
-            self._attrib["media-type"] = guess_type(self._attrib["href"])[0] or "application/octet-stream"
+            self._attrib["media-type"] = guess_media_type(self._attrib["href"])
         else:
             self._attrib["media-type"] = value
 
     @property
     def home(self, /):
-        return elf._manifest._opf_dir
+        return self._manifest._epub._opf_dir
 
     @property
     def name(self, /):
@@ -192,17 +138,19 @@ class Item(ElementAttribProxy):
     def suffixes(self, /):
         return self.path.suffixes
 
-    def update(self, /, attrib=None, merge=False):
+    def update(self, attrib=None, /, **attrs):
         if attrib:
-            if not merge:
-                if "href" in attrib:
-                    href = attrib["href"]
-                    self.rename(href)
-                    if len(attrib) == 1:
-                        return
-                    attrib = dict(attrib)
-                    del attrib["href"]
-            super().update(attrib, merge=merge)
+            attrib = dict(attrib)
+            if attrs:
+                attrib.update(attrs)
+        else:
+            attrib = attrs
+        href = attrib.pop("href", None)
+        if href:
+            self.rename(href)
+        if attrib:
+            super().update(attrib)
+        return self
 
     def is_relative_to(self, /, *other):
         return self.path.is_relative_to(*other)
@@ -287,18 +235,22 @@ class Item(ElementAttribProxy):
 
     def remove(self, /):
         self._manifest.remove(self.href)
+        return self
 
     def rename(self, href_new, /):
         self._manifest.rename(self.href, href_new)
+        return self
 
     def replace(self, href, /):
         self._manifest.replace(self.href, href)
+        return self
 
     def stat(self, /) -> Optional[stat_result]:
         return self._manifest.stat(self.href)
 
     def touch(self, /):
         self._manifest.touch(self.href)
+        return self
 
     unlink = remove
 
@@ -331,7 +283,7 @@ class Metadata(ElementProxy):
 
     def __repr__(self, /):
         attrib = self._attrib or ""
-        return f"<{self.tag}>{attrib}\n{pformat(self.list())}"
+        return f"<{self.tag}>{attrib}\n{pformat(self.iter().list())}"
 
     def add(
         self, 
@@ -393,53 +345,42 @@ class Metadata(ElementProxy):
         )
 
 
-class Manifest(dict):
+class Manifest(dict[str, Item]):
 
-    def __init__(self, root, opf_dir="", zfile=None):
+    def __init__(self, /, root: Element, epub):
         self._root = root
         self._attrib = root.attrib
+        self._epub = epub
         self._proxy = ElementAttribProxy(root)
-        self._opf_dir = opf_dir
-        self._zfile = zfile
-        self._href_to_id = href_to_id = {}
-        self._href_to_file = href_to_file = {}
+        self._href_to_id: dict[str, str] = {}
+        self._href_to_file: dict[str, File] = {}
         if len(root):
+            href_to_id = self._href_to_id
             has_dangling = False
             for item in root.iterfind("*"):
                 try:
-                    id = item.attrib["id"]
-                    href = item.attrib["href"]
+                    id = cast(str, item.attrib["id"])
+                    href = cast(str, item.attrib["href"])
                 except LookupError:
                     has_dangling = True
                     continue
-                super().__setitem__(id, Item(item, self))
-                href_to_id[href] = id
+                else:
+                    super().__setitem__(id, Item(item, self))
+                    href_to_id[href] = id
             if has_dangling:
-                root[:] = (item._root for item in self.values())
+                root[:] = (item._root for item in self.values()) # type: ignore
+            zfile = epub.__dict__.get("_zfile")
+            opf_dir = epub._opf_dir
             if zfile:
+                href_to_file = self._href_to_file
                 for href in href_to_id:
-                    zpath = joinpath(opf_dir, href) if opf_dir else href
+                    zpath = joinpath(opf_dir, href)
                     zinfo = zfile.NameToInfo.get(zpath)
                     if not zinfo or zinfo.is_dir():
                         warn(f"missing file in original epub: {href!r}")
+                        href_to_file[href] = File(joinpath(self._workdir.name, str(uuid4())))
                     else:
-                        zmtime = int(mktime((*zinfo.date_time, 0, 0, 0)))
-                        href_to_file[href] = FileInEpub( 
-                            open=wrap_open_in_bytes(partial(zfile.open, zpath)), 
-                            stat=lambda _result=stat_result((
-                                0, 0, 0, 0, 0, 0, 
-                                zinfo.file_size, 
-                                zmtime, 
-                                zmtime, 
-                                zmtime, 
-                            )): _result, 
-                        )
-
-    def __del__(self, /):
-        try:
-            self.__dict__["_workdir"].cleanup()
-        except:
-            pass
+                        href_to_file[href] = File(zpath, zfile)
 
     def __call__(self, href, /):
         try:
@@ -448,20 +389,36 @@ class Manifest(dict):
             raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
         return self[id]
 
+    def __contains__(self, other, /):
+        if isinstance(other, Item):
+            return other._manifest is self and other.id in self
+        return super().__contains__(other)
+
+    def __del__(self, /):
+        try:
+            self.__dict__["_workdir"].cleanup()
+        except:
+            pass
+
     def __delitem__(self, key, /):
         pop = self.pop
-        if isinstance(key, int):
+        if isinstance(key, Item):
+            key = key.id
+        if isinstance(key, str):
+            pop(key, None)
+        elif isinstance(key, int):
             el = self._root[key]
             pop(el.attrib["id"], None)
         elif isinstance(key, slice):
             for el in self._root[key]:
                 pop(el.attrib["id"], None)
-        elif isinstance(key, str):
-            pop(key, None)
         else:
             super().__delitem__(self, key)
+        return self
 
     def __getitem__(self, key, /):
+        if isinstance(key, Item):
+            key = key.id
         if isinstance(key, int):
             return Item(self._root[key], self)
         elif isinstance(key, slice):
@@ -470,49 +427,37 @@ class Manifest(dict):
             return super().__getitem__(key)
 
     def __setitem__(self, id, value, /):
+        if isinstance(id, Item):
+            id = id.id
+        if id not in self:
+            raise LookupError(f"no such item id: {id!r}")
         if isinstance(value, str):
-            if id in self:
-                self.rename(self[id]["href"], value)
-            else:
-                self.add(value, id=id)
+            self.rename(self[id].href, href)
         elif isinstance(value, bytes):
-            if id not in self:
-                raise LookupError(f"no such item id: {id!r}")
-            self.write(self[id]["href"], value)
+            self.write(self[id].href, value)
         elif isinstance(value, PathLike):
-            if id not in self:
-                raise LookupError(f"no such item id: {id!r}")
-            href = self[id]["href"]
-            self._href_to_file = FileInEpub(fsdecode(value))
-        elif isinstance(value, (Mapping, Iterable)):
-            if id in self:
-                self[id].update(value)
-            else:
-                attrib = dict(value)
-                href = attrib.get("href")
-                if not href:
-                    raise ValueError("missing href")
-                if "media-type" not in attrib:
-                    attrib["media-type"] = guess_type(href)[0] or "application/octet-stream"
-                self.add(href, id=id, attrib=attrib)
+            self._href_to_file[self[id].href] = File(value)
+        elif isinstance(value, Mapping):
+            self[id].update(value)
         else:
             raise TypeError("only `bytes`, `str`, `os.PathLike` and `typing.Mapping` are accecptable")
+        return self
 
     @cached_property
     def _workdir(self, /):
-        return TemporaryDirectory()
+        return TemporaryDirectory(self._epub._tempdir)
 
     @cached_property
-    def href_to_id(self):
+    def href_to_id(self, /):
         return MappingProxyType(self._href_to_id)
 
     @cached_property
-    def href_to_file(self):
+    def href_to_file(self, /):
         return MappingProxyType(self._href_to_file)
 
     @property
     def home(self, /):
-        return self._opf_dir
+        return self._epub._opf_dir
 
     @property
     def attrib(self, /):
@@ -527,8 +472,11 @@ class Manifest(dict):
         self._href_to_file.clear()
         self._href_to_id.clear()
         super().clear()
+        return self
 
-    def pop(self, id, default=undefined):
+    def pop(self, id, /, default=undefined):
+        if isinstance(id, Item):
+            id = id.id
         if id not in self:
             if default is undefined:
                 raise LookupError(f"no such item id: {id!r}")
@@ -538,14 +486,15 @@ class Manifest(dict):
             self._root.remove(item._root)
         except:
             pass
-        href = item["href"]
+        href = item.href
         self._href_to_id.pop(href, None)
-        path = self._href_to_file.pop(href, None)
-        if path is not None and path.internal:
+        file = self._href_to_file.pop(href, None)
+        if file and file.check_open_mode("w"):
             try:
-                remove(path.path)
+                file.remove()
             except:
                 pass
+        return item
 
     def popitem(self, /):
         id, item = super().popitem()
@@ -555,44 +504,104 @@ class Manifest(dict):
             pass
         href = item.href
         self._href_to_id.pop(href, None)
-        path = self._href_to_file.pop(href, None)
-        if path is not None and path.internal:
+        file = self._href_to_file.pop(href, None)
+        if file is not None and file.check_open_mode("w"):
             try:
-                remove(path.path)
+                file.remove()
             except:
                 pass
         return id, item
 
-    def set(self, id, /, href="", attrib=None):
-        if id in self:
-            if href:
-                if attrib:
-                    attrib = {**attrib, "href": href}
-                else:
-                    attrib = {"href": href}
-            self[id].update(attrib, merge=False)
+    def set(self, id, value, /):
+        if isinstance(id, Item):
+            id = id.id
+        if isinstance(value, str):
+            href = value
+            if id in self:
+                item = self[id]
+                self.rename(item.href, href)
+                return item
+            else:
+                return self.add(href, id=id)
+        elif isinstance(value, bytes):
+            if id not in self:
+                raise LookupError(f"no such item id: {id!r}")
+            item = self[id]
+            self.write(item.href, value)
+            return item
+        elif isinstance(value, PathLike):
+            if id not in self:
+                raise LookupError(f"no such item id: {id!r}")
+            item = self[id]
+            self._href_to_file[item.href] = File(value)
+            return item
+        elif isinstance(value, Mapping):
+            if id in self:
+                return self[id].update(value)
+            else:
+                return self.add(attrib["href"], id=id, attrib=attrib)
         else:
-            self.add(href, id=id, attrib=attrib)
+            raise TypeError("only `bytes`, `str`, `os.PathLike` and `typing.Mapping` are accecptable")
 
-    def setdefault(self, id, /, href="", attrib=None):
-        if id in self:
-            self[id].update(attrib, merge=True)
+    def setdefault(self, id, value, /):
+        if isinstance(id, Item):
+            id = id.id
+        if isinstance(value, str):
+            try:
+                return self[id]
+            except LookupError:
+                return self.add(value, id=id)
+        elif isinstance(value, Mapping):
+            try:
+                return self[id].merge(value)
+            except LookupError:
+                return self.add(attrib["href"], id=id, attrib=attrib)
         else:
-            self.add(href, id=id, attrib=attrib)
+            raise TypeError("only `str` and `typing.Mapping` are accecptable")
 
-    def update(self, id, /, attrib=None, merge=False):
-        if id not in self:
-            raise LookupError(f"no such item id: {id!r}")
-        if attrib:
-            self[id].update(attrib, merge=merge)
+    def merge(self, id_or_attrib=None, /, **attrs):
+        if isinstance(id_or_attrib, Item):
+            id_or_attrib = id_or_attrib.id
+        if isinstance(id_or_attrib, str):
+            id = id_or_attrib
+            if id in self:
+                if attrs:
+                    self[id].merge(attrs)
+            elif "href" in attrs:
+                href = attrs.pop("href")
+                self.add(href, attrib=attrs)
+            else:
+                raise LookupError(f"no such item id: {id!r}")
+        else:
+            self._proxy.merge(id_or_attrib, **attrs)
+        return self
+
+    def update(self, id_or_attrib=None, /, **attrs):
+        if isinstance(id_or_attrib, Item):
+            id_or_attrib = id_or_attrib.id
+        if isinstance(id_or_attrib, str):
+            id = id_or_attrib
+            if id in self:
+                if attrs:
+                    self[id].update(attrs)
+            elif "href" in attrs:
+                href = attrs.pop("href")
+                self.add(href, attrib=attrs)
+            else:
+                raise LookupError(f"no such item id: {id!r}")
+        else:
+            self._proxy.update(id_or_attrib, **attrs)
+        return self
 
     #################### SubElement Methods #################### 
 
+    @PyLinq.streamify
     def filter(self, /, predicate=None):
         if not callable(predicate):
             return iter(self.values())
         return filter(predicate, self.values())
 
+    @PyLinq.streamify
     def filter_by_attr(self, predicate=None, attr="media-type", /):
         def activate_predicate(predicate):
             if predicate is None:
@@ -645,6 +654,7 @@ class Manifest(dict):
             return filter(lambda item: attr in item, self.values())
         return filter(lambda item: attr in item and predicate(item[attr]), self.values())
 
+    @PyLinq.streamify
     def iter(self, /):
         for el in self._root.iterfind("{*}item"):
             id = el.attrib.get("id")
@@ -665,13 +675,13 @@ class Manifest(dict):
                         warn(f"removed an item because of missing href attribute: {item!r}")
                 continue
             if not el.attrib.get("media-type"):
-                el.attrib["media-type"] = guess_type(href)[0] or "application/octet-stream"
+                el.attrib["media-type"] = guess_media_type(href)
             if id is None:
                 id = str(uuid4())
                 item = Item(el, self)
                 super().__setitem__(id, item)
                 self._href_to_id[href] = id
-                self._href_to_file[href] = FileInEpub(ospath.join(self._workdir.name, id), True)
+                self._href_to_file[href] = File(ospath.join(self._workdir.name, id))
                 yield item
             elif id in self:
                 item = self[id]
@@ -685,18 +695,16 @@ class Manifest(dict):
                 except:
                     pass
 
-    def list(self, /):
-        return list(self.iter())
-
     def sort(self, key=id, reverse=False, use_backend_element=False):
         if use_backend_element:
             self._root[:] = sorted(self._root.iterfind("{*}item[@id][@href]"), key=key, reverse=reverse)
         else:
             self._root[:] = (e._root for e in sorted(self.iter(), key=key, reverse=reverse))
+        return self
 
     #################### File System Methods #################### 
 
-    def add(self, href, /, file=None, id=None, media_type=None, stat=None, attrib=None):
+    def add(self, href, /, file=None, fs=None, open_modes=None, id=None, media_type=None, attrib=None):
         assert (href := href.strip("/"))
         if href in self._href_to_id:
             raise FileExistsError(errno.EEXIST, f"file exists: {href!r}")
@@ -705,43 +713,40 @@ class Manifest(dict):
             id = uid
         elif id in self:
             raise LookupError(f"id already exists: {id!r}")
-        if media_type is None:
-            media_type = guess_type(href)[0] or "application/octet-stream"
-        if isinstance(file, (bytes, str, PathLike)):
-            path = fsdecode(file)
-            if not ospath.isfile(path):
-                raise OSError(errno.EINVAL, f"not a file: {path}")
-            internal = False
-        elif callable(file):
-            path = None
-            internal = False
-        else:
+        attrib = dict(attrib) if attrib else {}
+        attrib["id"] = id
+        attrib["href"] = href
+        if not media_type:
+            media_type = attrib.get("media-type")
+            if not media_type:
+                media_type = attrib["media-type"] = guess_media_type(href)
+        if fs is not None:
+            file = File(file, fs=fs, open_modes=open_modes)
+        elif file is None:
+            file = File(ospath.join(self._workdir.name, uid))
+        elif isinstance(file, IOBase) or hasattr(file, "read") and not hasattr(file, "open"):
+            file0 = file
             path = ospath.join(self._workdir.name, uid)
-            internal = True
-        if internal and hasattr(file, "read"):
-            copyfileobj(file, open(path, "wb"))
-        if attrib:
-            attrib = dict(attrib, id=id, href=href)
+            file = File(path)
+            test_data = file0.read(0)
+            if test_data == b"":
+                copyfileobj(file0, open(path, "wb"))
+            elif test_data == "":
+                copyfileobj(file0, open(path, "w"))
+            else:
+                raise TypeError(f"incorrect read behavior: {file0!r}")
         else:
-            attrib = {"id": id, "href": href}
-        if media_type:
-            attrib["media-type"] = media_type
-        elif "media-type" not in attrib:
-            attrib["media-type"] = guess_type(href)[0] or "application/octet-stream"
+            file = File(file, open_modes=open_modes)
         item = Item(el_add(self._root, "item", attrib=attrib, namespaces=NAMESPACES), self)
         super().__setitem__(id, item)
         self._href_to_id[href] = id
-        if internal:
-            self._href_to_file[href] = FileInEpub(path, True)
-        elif path is None:
-            self._href_to_file[href] = FileInEpub(open=file, stat=stat)
-        else:
-            self._href_to_file[href] = FileInEpub(path)
+        self._href_to_file[href] = file
         return item
 
     def exists(self, href, /):
         return href in self._href_to_id
 
+    @PyLinq.streamify
     def glob(self, pattern="*", dirname="", ignore_case=False):
         pattern = pattern.strip("/")
         if not pattern:
@@ -761,6 +766,7 @@ class Manifest(dict):
             except KeyError:
                 pass
 
+    @PyLinq.streamify
     def iterdir(self, /, dirname=""):
         dirname = dirname.strip("/")
         for href, id in self._href_to_id.items():
@@ -780,59 +786,46 @@ class Manifest(dict):
         encoding=None, 
         errors=None, 
         newline=None, 
-        ensure_path=False, 
     ):
+        assert (href := href.strip("/"))
         if mode not in OPEN_MODES:
             raise ValueError(f"invalid open mode: {mode!r}")
-        assert (href := href.strip("/"))
         href_to_file = self._href_to_file
         if href in self._href_to_id:
             if "x" in mode:
                 raise FileExistsError(errno.EEXIST, f"file exists: {href!r}")
-            path = href_to_file.get(href)
-            if path is None:
-                href_to_file[href] = path = FileInEpub(ospath.join(self._workdir.name, str(uuid4())), True)
-            # NOTE: External files are not allowed to be modified. If modifications are necessary, 
-            #       they will be copied to the ePub working directory first.
-            if ensure_path and not path.path or not path.internal and ("r" not in mode or "+" in mode):
-                path_src = path.path
+            file = href_to_file.get(href)
+            if file is None:
+                href_to_file[href] = file = File(ospath.join(self._workdir.name, str(uuid4())))
+            elif not file.check_open_mode(mode):
                 path_dst = ospath.join(self._workdir.name, str(uuid4()))
-                path_new = FileInEpub(path_dst, True)
                 if "w" not in mode:
-                    if path_src and ospath.isfile(path_src):
-                        copy(path_src, path_dst)
+                    try:
+                        fsrc = file.open("rb", buffering=0)
+                    except FileNotFoundError:
+                        if "r" in mode:
+                            raise
                     else:
-                        with path.open("rb", buffering=0) as fsrc:
+                        with fsrc:
                             copyfileobj(fsrc, open(path_dst, "wb"))
-                href_to_file[href] = path = path_new
+                href_to_file[href] = file = File(path_dst)
         elif "r" in mode:
             raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
         else:
             item = self.add(href)
-            path = href_to_file[href]
+            file = href_to_file[href]
         if "b" not in mode and encoding is None:
             encoding = "utf-8"
-        try:
-            return path.open(
-                mode=mode, 
-                buffering=buffering, 
-                encoding=encoding, 
-                errors=errors, 
-                newline=newline, 
-            )
-        except (FileNotFoundError, LookupError):
-            if path.internal:
-                open(path, "wb", buffering=0).close()
-            return path.open(
-                mode=mode, 
-                buffering=buffering, 
-                encoding=encoding, 
-                errors=errors, 
-                newline=newline, 
-            )
+        return file.open(
+            mode=mode, 
+            buffering=buffering, 
+            encoding=encoding, 
+            errors=errors, 
+            newline=newline, 
+        )
 
     def read(self, href, /):
-        with self.open(href, "rb") as f:
+        with self.open(href, "rb", buffering=0) as f:
             return f.read()
 
     read_bytes = read
@@ -853,10 +846,10 @@ class Manifest(dict):
                 self._root.remove(item._root)
             except:
                 pass
-        path = self._href_to_file.pop(href, None)
-        if path is not None and path.internal:
+        file = self._href_to_file.pop(href, None)
+        if file is not None and file.check_open_mode("w"):
             try:
-                remove(path.path)
+                file.remove()
             except:
                 pass
 
@@ -883,6 +876,7 @@ class Manifest(dict):
             self.remove(dest_href)
         self.rename(href, dest_href)
 
+    @PyLinq.streamify
     def rglob(self, pattern="", dirname="", ignore_case=False):
         pattern = joinpath("**", pattern.lstrip("/"))
         return self.glob(pattern, dirname)
@@ -901,51 +895,44 @@ class Manifest(dict):
 
     def touch(self, href, /):
         assert (href := href.strip("/"))
-        if href in self._href_to_id:
-            if href not in self._href_to_file:
-                self.open(href, "wb", buffering=0).close()
-        else:
-            self.open(href, "wb", buffering=0).close()
+        self.open(href, "ab", buffering=0).close()
 
     unlink = remove
 
     def write(self, href, /, data):
         assert (href := href.strip("/"))
-        if isinstance(data, PathLike) or hasattr(data, "read"):
-            if isinstance(data, PathLike):
-                fsrc = open(data, "rb", buffering=0)
-                fsrc_read = fsrc.read
-            elif data.read(0) == b"":
-                fsrc_read = data.read
-            elif isinstance(data, TextIOWrapper):
-                fsrc_read = data.buffer.read
+        if isinstance(data, File):
+            with data.open("rb", buffering=0) as fsrc, self.open("wb", buffering=0) as fdst:
+                copyfileobj(fsrc, fdst)
+        elif callable(getattr(data, "read", None)):
+            test_data = data.read(0)
+            if test_data == b"":
+                with self.open("wb", buffering=0) as fdst:
+                    copyfileobj(data, fdst)
+            elif test_data == "":
+                with self.open("w") as fdst:
+                    copyfileobj(data, fdst)
             else:
-                org_fsrc_read = data.read
-                fsrc_read = lambda size: bytes(org_fsrc_read(size), "utf-8")
-            bufsize = 1 << 16
-            with self.open(href, "wb") as fdst:
-                fdst_write = fdst.write
-                while (chunk := fsrc_read(bufsize)):
-                    fdst_write(chunk)
-            return
-        if isinstance(data, str):
-            content = bytes(data, "utf-8")
+                raise TypeError(f"incorrect read behavior: {data!r}")
+        elif isinstance(data, (str, PathLike)):
+            with open(data, "rb", buffering=0) as fsrc, self.open("wb", buffering=0) as fdst:
+                copyfileobj(fsrc, fdst)
         else:
             content = memoryview(data)
-        with self.open(href, "wb") as f:
-            return f.write(content)
+            with self.open(href, "wb") as f:
+                return f.write(content)
 
     write_bytes = write
 
     def write_text(self, href, /, text, encoding=None, errors=None, newline=None):
         assert (href := href.strip("/"))
-        with self.open(href, mode="w", encoding=encoding, errors=errors, newline=newline) as f:
+        with self.open(href, "w", encoding=encoding, errors=errors, newline=newline) as f:
             return f.write(text)
 
 
-class Spine(dict):
+class Spine(dict[str, Itemref]):
 
-    def __init__(self, root, manifest):
+    def __init__(self, root: Element, /, manifest: Manifest):
         self._root = root
         self._attrib = root.attrib
         self._proxy = ElementAttribProxy(root)
@@ -957,12 +944,12 @@ class Spine(dict):
                     has_dangling = True
                     continue
                 idref = itemref.attrib.get("idref")
-                if idref in manifest:
-                    super().__setitem__(idref, Itemref(itemref))
+                if idref is not None and idref in manifest:
+                    super().__setitem__(cast(str, idref), Itemref(itemref))
                 else:
                     has_dangling = True
             if has_dangling:
-                root[:] = (ref._root for ref in self.values())
+                root[:] = (itemref._root for itemref in self.values()) # type: ignore
 
     def __call__(self, id, /, attrib=None):
         itemref = self.get(id)
@@ -982,18 +969,27 @@ class Spine(dict):
 
     def __delitem__(self, key, /):
         pop = self.pop
+        if isinstance(key, Item):
+            key = key.id
+        elif isinstance(key, Itemref):
+            key = key.idref
+        if isinstance(key, str):
+            pop(key, None)
         if isinstance(key, int):
             el = self._root[key]
             pop(el.attrib["id"], None)
         elif isinstance(key, slice):
             for el in self._root[key]:
                 pop(el.attrib["id"], None)
-        elif isinstance(key, str):
-            pop(key, None)
         else:
             super().__delitem__(self, key)
+        return self
 
     def __getitem__(self, key, /):
+        if isinstance(key, Item):
+            key = key.id
+        elif isinstance(key, Itemref):
+            key = key.idref
         if isinstance(key, int):
             return Itemref(self._root[key])
         elif isinstance(key, slice):
@@ -1002,7 +998,12 @@ class Spine(dict):
             return super().__getitem__(key)
 
     def __setitem__(self, id, attrib, /):
+        if isinstance(id, Item):
+            id = id.id
+        elif isinstance(id, Itemref):
+            id = id.idref
         self[id].update(attrib)
+        return self
 
     @property
     def attrib(self, /):
@@ -1017,7 +1018,13 @@ class Spine(dict):
         return self._proxy
 
     def _add(self, id, /, attrib=None):
-        return Itemref(el_add(self._root, "itemref", attrib=attrib, namespaces=NAMESPACES))
+        if attrib:
+            attrib = dict(attrib, idref=id)
+        else:
+            attrib = {"idref": id}
+        itemref = Itemref(el_add(self._root, "itemref", attrib=attrib, namespaces=NAMESPACES))
+        super().__setitem__(id, itemref)
+        return itemref
 
     def add(self, id, /, attrib=None):
         if isinstance(id, Item):
@@ -1031,7 +1038,9 @@ class Spine(dict):
     def clear(self, /):
         self._root.clear()
         super().clear()
+        return self
 
+    @PyLinq.streamify
     def iter(self, /):
         for el in self._root.iterfind("{*}itemref"):
             idref = el.attrib.get("idref")
@@ -1050,9 +1059,6 @@ class Spine(dict):
                     raise RuntimeError(f"different itemref elements {el!r} and {itemref._root!r} share the same id {idref!r}")
                 yield itemref
 
-    def list(self, /):
-        return list(self.iter())
-
     def pop(self, id, /, default=undefined):
         if id not in self:
             if default is undefined:
@@ -1063,6 +1069,7 @@ class Spine(dict):
             self._root.remove(itemref._root)
         except:
             pass
+        return itemref
 
     def popitem(self, /):
         id, itemref = super().popitem()
@@ -1074,33 +1081,60 @@ class Spine(dict):
 
     def set(self, id, /, attrib=None):
         if id in self:
-            self[id].update(attrib, merge=False)
+            return self[id].update(attrib)
         else:
-            self.add(id, attrib)
+            return self.add(id, attrib)
 
     def setdefault(self, id, /, attrib=None):
         if id in self:
-            self[id].update(attrib, merge=True)
+            return self[id].merge(attrib)
         else:
-            self.add(id, attrib)
+            return self.add(id, attrib)
 
     def sort(self, key=id, reverse=False, use_backend_element=False):
         if use_backend_element:
             self._root[:] = sorted(self._root.iterfind("{*}itemref[@idref]"), key=key, reverse=reverse)
         else:
             self._root[:] = (e._root for e in sorted(self.iter(), key=key, reverse=reverse))
+        return self
 
-    def update(self, id, /, attrib=None, merge=False):
-        if id not in self:
-            raise LookupError(f"no such item id: {id!r}")
-        if attrib:
-            self[id].update(attrib, merge=merge)
+    def merge(self, id_or_attrib=None, /, **attrs):
+        if isinstance(id_or_attrib, Item):
+            id_or_attrib = id_or_attrib.id
+        elif isinstance(id_or_attrib, Itemref):
+            id_or_attrib = id_or_attrib.idref
+        if isinstance(id_or_attrib, str):
+            id = id_or_attrib
+            if id in self:
+                if attrs:
+                    self[id].merge(attrs)
+            else:
+                self.add(id, attrs)
+        else:
+            self._proxy.merge(id_or_attrib, **attrs)
+        return self
+
+    def update(self, id_or_attrib=None, /, **attrs):
+        if isinstance(id_or_attrib, Item):
+            id_or_attrib = id_or_attrib.id
+        elif isinstance(id_or_attrib, Itemref):
+            id_or_attrib = id_or_attrib.idref
+        if isinstance(id_or_attrib, str):
+            id = id_or_attrib
+            if id in self:
+                if attrs:
+                    self[id].update(attrs)
+            else:
+                self.add(id, attrs)
+        else:
+            self._proxy.update(id_or_attrib, **attrs)
+        return self
 
 
 class ePub(ElementProxy):
     __cache_get_key__ = False
 
-    def __init__(self, path=None):
+    def __init__(self, /, path=None, tempdir=None):
         if path and ospath.lexists(path):
             self._zfile = zfile = ZipFile(path)
             contenter_xml = zfile.read("META-INF/container.xml")
@@ -1131,6 +1165,7 @@ class ePub(ElementProxy):
 })
         super().__init__(root)
         self._path = path
+        self._tempdir = tempdir
         self.metadata
         self.manifest
         self.spine
@@ -1158,15 +1193,19 @@ class ePub(ElementProxy):
 
     @cached_property
     def manifest(self, /):
-        return Manifest(
-            el_set(self._root, "{*}manifest", "manifest"), 
-            self._opf_dir, 
-            self.__dict__.get("_zfile"), 
-        )
+        return Manifest(el_set(self._root, "{*}manifest", "manifest"), self)
 
     @cached_property
     def spine(self, /):
         return Spine(el_set(self._root, "{*}spine", "spine"), self.manifest)
+
+    @property
+    def version(self, /):
+        try:
+            return self._attrib["version"]
+        except KeyError:
+            self._attrib["version"] = "3"
+            return "3"
 
     @property
     def identifier(self, /):
@@ -1299,12 +1338,4 @@ class ePub(ElementProxy):
                     with zfile.open(name) as fsrc, wfile.open(name, "w") as fdst:
                         copyfileobj(fsrc, fdst)
                 write_oebps()
-
-
-# TODO: 提供一个方法，对于 epub2 的电子书，可以把它的 guide、toc 等元素，等价转换并集中到 nav.xhtml 中
-# TODO: 参详一下 ebooklib 的这些内容：
-## 1. 各种 EpubItem 的子类
-## 2. EpubWriter._write*
-## 3. templates, get_template, set_template
-## 4. set_direction, direction
 

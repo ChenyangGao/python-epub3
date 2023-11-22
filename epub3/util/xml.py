@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-__author__  = "ChenyangGao <https://chenyanggao.github.io/>"
+__author__  = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = [
     "generalize_elementpath", "generalize_xpath", "clean_nsmap", "extract_name", 
     "resolve_prefix", "el_find", "el_iterfind", "el_xpath", "el_add", "el_del", 
@@ -13,12 +13,12 @@ from re import compile as re_compile, Match, Pattern
 from typing import cast, Callable, Final, ItemsView, Iterable, Iterator, Mapping, NamedTuple, Optional
 try:
     # https://lxml.de
-    from lxml.etree import _Element as Element, SubElement # type: ignore
+    from lxml.etree import _Element as Element # type: ignore
     from lxml._elementpath import xpath_tokenizer_re # type: ignore
     USE_BUILTIN_XML = False
 except ModuleNotFoundError:
     # https://docs.python.org/3/library/xml.etree.elementtree.html
-    from xml.etree.ElementTree import Element, SubElement # type: ignore
+    from xml.etree.ElementTree import Element # type: ignore
     from xml.etree.ElementPath import xpath_tokenizer_re # type: ignore
     USE_BUILTIN_XML = True
 
@@ -520,7 +520,11 @@ def el_add(
                 else:
                     attrib[key] = val
     name = resolve_prefix(name, nsmap, namespaces, inherit=True)
-    sel = SubElement(el, name, nsmap=cast(dict[str, str], nsmap))
+    if USE_BUILTIN_XML:
+        sel = el.makeelement(name, cast(dict[str, str], {}))
+    else:
+        sel = el.makeelement(name, nsmap=cast(dict[str, str], nsmap))
+    el.append(sel)
     _el_set(sel, attrib, text, tail, nsmap, namespaces)
     return sel
 
@@ -626,18 +630,4 @@ def el_setfind(
     else:
         el_set(sel, attrib=attrib, text=text, tail=tail, namespaces=namespaces, merge=merge)
     return sel
-
-
-# TODO: 
-# el_move：移动
-# el_move_before
-# el_move_after
-# el_move_up：作为父元素的prev或next
-# el_swap：交换位置
-# el_sort：对子元素排序
-# el_copy：copy.deepcopy(el)
-# el_wrap：把查找到的一堆元素，插入作为某个元素的子元素，例如footnote的移动和集中。可能需要对查找到的元素进行二次map、过滤和排序
-# el_split：删除某个元素，它的所有子元素替换它原来位置
-# el_add_before
-# el_add_after
 

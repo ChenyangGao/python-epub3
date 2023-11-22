@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-__author__  = "ChenyangGao <https://chenyanggao.github.io/>"
+__author__  = "ChenyangGao <https://chenyanggao.github.io>"
 __all__ = ["NAMESPACES", "ElementAttribProxy", "ElementProxy"]
 
 from functools import cached_property
@@ -18,6 +18,7 @@ except ModuleNotFoundError:
     USE_BUILTIN_XML = True
 
 from .helper import items
+from .stream import PyLinq
 from .undefined import undefined
 from .xml import el_add, el_del, el_iterfind, el_set, el_setfind, resolve_prefix
 
@@ -78,6 +79,74 @@ class CachedMeta(type):
                 if state is not state_new and state != state_new:
                     val = self.__cache_instance__[key] = super().__call__(key, *args, **kwargs)
         return val
+
+
+class AttributeProxy(MutableMapping):
+
+    def __init__(self, backend, /):
+        self.__backend__ = backend
+
+    def __contains__(self, key, /):
+        return key in self.__backend__
+
+    def __delitem__(self, key, /):
+        del self.__backend__[key]
+        return self
+
+    def __getitem__(self, key, /):
+        return self.__backend__[key]
+
+    def __iter__(self, /):
+        return iter(self.__backend__)
+
+    def __len__(self, /):
+        return len(self.__backend__)
+
+    def __setitem__(self, key, value, /):
+        self.__backend__[key] = value
+        return self
+
+    def __repr__(self, /):
+        return repr(self.__backend__._attrib)
+
+    def keys(self, /):
+        return self.__backend__.keys()
+
+    def values(self, /):
+        return self.__backend__.values()
+
+    def items(self, /):
+        return self.__backend__.items()
+
+    def clear(self, /):
+        self.__backend__.clear()
+        return self
+
+    def get(self, key, /, default=undefined):
+        if default is undefined:
+            return self.__backend__.get(key)
+        return self.__backend__.get(key, default)
+
+    def pop(self, key, /, default=undefined):
+        if default is undefined:
+            return self.__backend__.pop(key)
+        return self.__backend__.pop(key, default)
+
+    def popitem(self, /):
+        return self.__backend__.popitem()
+
+    def setdefault(self, key, /, default=undefined):
+        if default is undefined:
+            return self.__backend__.setdefault(key)
+        return self.__backend__.setdefault(key, default)
+
+    def merge(self, attrib=None, /, **attrs):
+        self.__backend__.merge(attrib, **attrs)
+        return self
+
+    def update(self, attrib=None, /, **attrs):
+        self.__backend__.update(attrib, **attrs)
+        return self
 
 
 @MutableMapping.register
@@ -143,6 +212,7 @@ class ElementAttribProxy(metaclass=CachedMeta):
             del self._attrib[key]
         else:
             raise TypeError("only accept `key` type: int, slice and str")
+        return self
 
     def __eq__(self, other, /):
         if type(self) is not type(other):
@@ -165,6 +235,7 @@ class ElementAttribProxy(metaclass=CachedMeta):
     def __hash__(self, /):
         return hash(self._root)
 
+    @PyLinq.streamify
     def __iter__(self, /):
         return iter(self._attrib)
 
@@ -180,13 +251,14 @@ class ElementAttribProxy(metaclass=CachedMeta):
         if key in self.__const_keys__:
             raise LookupError(f"not allowed to set key: {key!r}")
         self._attrib[key] = val
+        return self
 
     def __repr__(self, /):
         return f"<{type(self).__qualname__}({self._attrib!r}) at {hex(id(self))}>"
 
     @cached_property
     def attrib(self, /):
-        return MappingProxyType(self._attrib)
+        return AttributeProxy(self)
 
     @property
     def nsmap(self, /):
@@ -196,12 +268,10 @@ class ElementAttribProxy(metaclass=CachedMeta):
     def proxy(self, /):
         return self
 
+    @PyLinq.streamify
     def iter(self, /):
         wrap_cls = next(cls for cls in type(self).__mro__ if cls.__dict__.get("__is_wrap_class__"))
         return map(wrap_cls, self._root.iterfind("*"))
-
-    def list(self, /):
-        return list(self.iter())
 
     def keys(self, /):
         return self._attrib.keys()
@@ -223,6 +293,7 @@ class ElementAttribProxy(metaclass=CachedMeta):
                 del attrib[key]
         else:
             attrib.clear()
+        return self
 
     def get(self, key, /, default=None):
         try:
@@ -264,9 +335,35 @@ class ElementAttribProxy(metaclass=CachedMeta):
             self._root[:] = sorted(self._root, key=key, reverse=reverse)
         else:
             self._root[:] = (e._root for e in sorted(self.iter(), key=key, reverse=reverse))
+        return self
 
-    def update(self, /, attrib=None, merge=False):
-        el_set(self._root, attrib=attrib, namespaces=NAMESPACES, merge=merge)
+    def merge(self, attrib=None, /, **attrs):
+        if attrib:
+            if attrs:
+                attrib = dict(attrib, **attrs)
+        else:
+            attrib = attrs
+        if attrib:
+            el_set(self._root, attrib=attrib, namespaces=NAMESPACES, merge=True)
+        return self
+
+    def update(self, attrib=None, /, **attrs):
+        const_keys = self.__const_keys__
+        if attrib:
+            if attrs:
+                attrib = dict(attrib, **attrs)
+            elif const_keys and (not isinstance(attrib, Mapping) or any(key in attrib for key in const_keys)):
+                attrib = dict(attrib)
+            else:
+                const_keys = ()
+        else:
+            attrib = attrs
+        if const_keys:
+            for key in const_keys:
+                attrib.pop(key, None)
+        if attrib:
+            el_set(self._root, attrib=attrib, namespaces=NAMESPACES, merge=False)
+        return self
 
 
 class ElementProxy(ElementAttribProxy):
@@ -306,9 +403,17 @@ class ElementProxy(ElementAttribProxy):
 
     def clear(self, /):
         self._root.clear()
+        return self
 
-    def update(self, /, attrib=None, text=None, tail=None, merge=False):
-        el_set(self._root, attrib=attrib, text=text, tail=tail, namespaces=NAMESPACES, merge=merge)
+    def merge(self, attrib=None, /, text=None, tail=None, **attrs):
+        super().merge(attrib, **attrs)
+        el_set(self._root, text=text, tail=tail, namespaces=NAMESPACES, merge=True)
+        return self
+
+    def update(self, attrib=None, /, text=None, tail=None, **attrs):
+        super().update(attrib, **attrs)
+        el_set(self._root, text=text, tail=tail, namespaces=NAMESPACES, merge=False)
+        return self
 
     def add(self, name, /, attrib=None, text=None, tail=None):
         wrap_cls = next(cls for cls in type(self).__mro__ if cls.__dict__.get("__is_wrap_class__"))
@@ -316,10 +421,12 @@ class ElementProxy(ElementAttribProxy):
 
     def delete(self, path, /):
         el_del(self._root, path, namespaces=NAMESPACES)
+        return self
 
     def find(self, path, /):
         return next(self.iterfind(path), None)
 
+    @PyLinq.streamify
     def iterfind(self, path, /):
         return map(
             next(cls for cls in type(self).__mro__ if cls.__dict__.get("__is_wrap_class__")), 
