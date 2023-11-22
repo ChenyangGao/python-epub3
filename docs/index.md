@@ -5,13 +5,18 @@ hide-toc: true
 ```{include} ../README.md
 :relative-docs: docs/
 :relative-images:
+```
 
+```{toctree}
+:caption: Cookbook
+:maxdepth: 3
+
+tutorial
 ```
 
 ```{toctree}
 :caption: Reference
 :hidden:
-
 ```
 
 ```{toctree}

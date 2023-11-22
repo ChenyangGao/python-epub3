@@ -88,6 +88,8 @@ pip install python-epub3
 >>> book.pack("book.epub")
 ```
 
+View [tutorial](https://python-epub3.readthedocs.io/en/latest/tutorial) for more details.
+
 ## Features
 
 - Proxy underlying XML element nodes to operate on OPF document.
@@ -100,7 +102,7 @@ pip install python-epub3
     > We are to admit no more causes of natural things than such as are both true and sufficient to explain their appearances.  
     > <span style="text-align: right; display: block">-- **Isaac Newton**</span>
 
-    > Everything should be made as simple as possible, but no simpler.
+    > Everything should be made as simple as possible, but no simpler.  
     > <span style="text-align: right; display: block">-- **Albert Einstein**</span>
 - Caching instance, not created repeatedly, and recycled in a timely manner.
 - Allow adding any openable files, as long as there is an open method and its parameters are compatible with [open](https://docs.python.org/3/library/functions.html#open).

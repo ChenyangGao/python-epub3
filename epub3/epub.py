@@ -213,7 +213,6 @@ class Item(ElementAttribProxy):
         encoding=None, 
         errors=None, 
         newline=None, 
-        ensure_path=False, 
     ):
         return self._manifest.open(
             self.href, 
@@ -222,7 +221,6 @@ class Item(ElementAttribProxy):
             encoding=encoding, 
             errors=errors, 
             newline=newline, 
-            ensure_path=ensure_path, 
         )
 
     def read(self, /):

@@ -212,7 +212,8 @@ class File:
             return False
         if mode == "r":
             return True
-        if not self.open_modes:
+        open_modes = self.open_modes
+        if not open_modes:
             if "r" not in mode or "+" in mode:
                 return False
         else:
