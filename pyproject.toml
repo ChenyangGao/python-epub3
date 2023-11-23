@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "python-epub3"
-version = "0.0.1.7"
+version = "0.0.1.8"
 description = "An awsome epub3 library."
 authors = ["ChenyangGao <wosiwujm@gmail.com>"]
 license = "MIT"

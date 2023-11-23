@@ -596,6 +596,7 @@ def el_setfind(
     """
     """
     find_text = find_tail = undefined
+    no_keys = set()
     preds = name
     if find_attrib:
         pred_parts = []
@@ -604,15 +605,21 @@ def el_setfind(
                 find_tail = val
             elif key == "":
                 find_text = val
+            elif val is None:
+                no_keys.add(key)
             else:
                 pred_parts.append((key, val))
         if pred_parts:
             preds += "".join("[@%s=%r]" % t for t in pred_parts)
-    if find_text is undefined and find_tail is undefined:
+    if find_text is undefined and find_tail is undefined and not no_keys:
         sel = el_find(el, preds, namespaces=namespaces)
     else:
         for sel in el_iterfind(el, preds, namespaces=namespaces):
-            if (find_text is undefined or sel.text == find_text) and (find_tail is undefined or sel.tail == find_tail):
+            if (
+                (find_text is undefined or sel.text == find_text) and 
+                (find_tail is undefined or sel.tail == find_tail) and 
+                not (no_keys and any(key in sel.attrib for key in no_keys))
+            ):
                 break
         else:
             sel = None

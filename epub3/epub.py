@@ -3,7 +3,7 @@
 
 __author__  = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 1)
-__all__ = ["ePub", "Metadata", "Manifest", "Item", "Spine", "Itemref"]
+__all__ = ["ePub", "Metadata", "Manifest", "Item", "Link", "Spine", "Itemref"]
 
 import errno
 import io
@@ -34,7 +34,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 
 from .util.file import File, OPEN_MODES
 from .util.helper import guess_media_type, items
-from .util.proxy import ElementAttribProxy, ElementProxy, NAMESPACES
+from .util.proxy import proxy_property, ElementAttribProxy, ElementProxy, NAMESPACES
 from .util.stream import PyLinq
 from .util.xml import el_add, el_del, el_iterfind, el_set
 from .util.undefined import undefined, UndefinedType
@@ -51,6 +51,7 @@ TemporaryDirectory.__del__ = TemporaryDirectory.cleanup # type: ignore
 class Item(ElementAttribProxy):
     __const_keys__ = ("id",)
     __protected_keys__ = ("href", "media-type")
+    __optional_keys__ = ("fallback", "media-overlay", "properties")
     __cache_get_state__ = lambda _, manifest: manifest
 
     def __init__(self, root: Element, manifest, /):
@@ -60,10 +61,10 @@ class Item(ElementAttribProxy):
     def __eq__(self, other, /):
         if type(self) is not type(other):
             return NotImplemented
-        return self._manifest is other._manifest and self.href == other.href
+        return self._manifest is other._manifest and self._attrib["href"] == other.href
 
     def __fspath__(self, /):
-        return self.href
+        return self._attrib["href"]
 
     def __hash__(self, /):
         return hash((self._root, id(self._manifest)))
@@ -77,30 +78,7 @@ class Item(ElementAttribProxy):
 
     @property
     def filename(self, /):
-        return joinpath(self.home, self.href)
-
-    @property
-    def id(self, /):
-        return self._attrib["id"]
-
-    @property
-    def href(self, /):
-        return self._attrib["href"]
-
-    @href.setter
-    def href(self, href_new, /):
-        self.rename(href_new)
-
-    @property
-    def media_type(self, /):
-        return self._attrib["media-type"]
-
-    @media_type.setter
-    def media_type(self, value, /):
-        if not value:
-            self._attrib["media-type"] = guess_media_type(self._attrib["href"])
-        else:
-            self._attrib["media-type"] = value
+        return joinpath(self.home, self._attrib["href"])
 
     @property
     def home(self, /):
@@ -112,7 +90,7 @@ class Item(ElementAttribProxy):
 
     @property
     def path(self, /):
-        return PurePosixPath(self.href)
+        return PurePosixPath(self._attrib["href"])
 
     @property
     def parent(self, /):
@@ -161,7 +139,7 @@ class Item(ElementAttribProxy):
     __truediv__ = joinpath
 
     def relpath(self, other, /):
-        return PurePosixPath(posixpath.relpath(other, posixpath.dirname(self.href)))
+        return PurePosixPath(posixpath.relpath(other, posixpath.dirname(self._attrib["href"])))
 
     def relative_to(self, /, *other):
         return self.path.relative_to(*other)
@@ -176,7 +154,7 @@ class Item(ElementAttribProxy):
         return self.path.with_suffix(suffix)
 
     def exists(self, /):
-        return self._manifest.exists(self.href)
+        return self._manifest.exists(self._attrib["href"])
 
     def is_file(self, /):
         return self.exists()
@@ -188,13 +166,13 @@ class Item(ElementAttribProxy):
         return False
 
     def glob(self, /, pattern="*", ignore_case=False):
-        return self._manifest.glob(pattern, posixpath.dirname(self.href), ignore_case=ignore_case)
+        return self._manifest.glob(pattern, posixpath.dirname(self._attrib["href"]), ignore_case=ignore_case)
 
     def rglob(self, /, pattern="", ignore_case=False):
-        return self._manifest.rglob(pattern, posixpath.dirname(self.href), ignore_case=ignore_case)
+        return self._manifest.rglob(pattern, posixpath.dirname(self._attrib["href"]), ignore_case=ignore_case)
 
     def iterdir(self, /):
-        return self._manifest.iterdir(posixpath.dirname(self.href))
+        return self._manifest.iterdir(posixpath.dirname(self._attrib["href"]))
 
     def match(self, /, path_pattern, ignore_case=False):
         path_pattern = path_pattern.strip("/")
@@ -203,7 +181,7 @@ class Item(ElementAttribProxy):
         pattern = joinpath(*posix_glob_translate_iter(path_pattern))
         if ignore_case:
             pattern = "(?i:%s)" % pattern
-        return re_compile(pattern).fullmatch(self.href) is not None
+        return re_compile(pattern).fullmatch(self._attrib["href"]) is not None
 
     def open(
         self, 
@@ -215,7 +193,7 @@ class Item(ElementAttribProxy):
         newline=None, 
     ):
         return self._manifest.open(
-            self.href, 
+            self._attrib["href"], 
             mode=mode, 
             buffering=buffering, 
             encoding=encoding, 
@@ -224,49 +202,60 @@ class Item(ElementAttribProxy):
         )
 
     def read(self, /):
-        return self._manifest.read(self.href)
+        return self._manifest.read(self._attrib["href"])
 
     read_bytes = read
 
     def read_text(self, /, encoding=None):
-        return self._manifest.read(self.href, encoding=encoding)
+        return self._manifest.read_text(self._attrib["href"], encoding=encoding)
 
     def remove(self, /):
-        self._manifest.remove(self.href)
+        self._manifest.remove(self._attrib["href"])
         return self
 
     def rename(self, href_new, /):
-        self._manifest.rename(self.href, href_new)
+        self._manifest.rename(self._attrib["href"], href_new)
         return self
 
     def replace(self, href, /):
-        self._manifest.replace(self.href, href)
+        self._manifest.replace(self._attrib["href"], href)
         return self
 
     def stat(self, /) -> Optional[stat_result]:
-        return self._manifest.stat(self.href)
+        return self._manifest.stat(self._attrib["href"])
 
     def touch(self, /):
-        self._manifest.touch(self.href)
+        self._manifest.touch(self._attrib["href"])
         return self
 
     unlink = remove
 
     def write(self, /, data):
-        return self._manifest.write(self.href, data)
+        return self._manifest.write(self._attrib["href"], data)
 
     write_bytes = write
 
     def write_text(self, /, text, encoding=None, errors=None, newline=None):
-        return self._manifest.write_text(self.href, text, encoding=encoding, errors=errors, newline=newline)
+        return self._manifest.write_text(self._attrib["href"], text, encoding=encoding, errors=errors, newline=newline)
+
+
+class DCTerm(ElementProxy):
+    pass
+
+
+class Meta(ElementProxy):
+    __protected_keys__ = ("property",)
+    __optional_keys__ = ("dir", "id", "refines", "scheme", "xml:lang")
+
+
+class Link(ElementAttribProxy):
+    __protected_keys__ = ("href", "rel")
+    __optional_keys__ = ("hreflang", "id", "media-type", "properties", "refines")
 
 
 class Itemref(ElementAttribProxy):
     __const_keys__ = ("idref",)
-
-    @property
-    def idref(self, /):
-        return self._attrib["idref"]
+    __optional_keys__ = ("id", "linear", "properties")
 
     @property
     def linear(self, /):
@@ -278,10 +267,10 @@ class Itemref(ElementAttribProxy):
 
 
 class Metadata(ElementProxy):
+    __wrap_class_map__ = {"{*}meta": Meta, "{*}": Link, "dc:*": DCTerm}
 
     def __repr__(self, /):
-        attrib = self._attrib or ""
-        return f"<{self.tag}>{attrib}\n{pformat(self.iter().list())}"
+        return f"{super().__repr__()}\n{pformat(self.iter().list())}"
 
     def add(
         self, 
@@ -342,6 +331,64 @@ class Metadata(ElementProxy):
             auto_add=auto_add, 
         )
 
+    def name_meta(
+        self, 
+        name, 
+        content: Optional[str] = None, 
+        /, 
+        find_attrib: Optional[Mapping] = None, 
+        attrib: Optional[Mapping] = None, 
+        text: Optional[str] = None, 
+        merge: bool = False, 
+        delete: bool = False, 
+        auto_add: bool = False, 
+    ):
+        if find_attrib:
+            find_attrib = {**find_attrib, "name": name}
+        else:
+            find_attrib = {"name": name}
+        if content is not None:
+            find_attrib["content"] = content
+        return self.meta(
+            find_attrib=find_attrib, 
+            attrib=attrib, 
+            text=text, 
+            merge=merge, 
+            delete=delete, 
+            auto_add=auto_add, 
+        )
+
+    def property_meta(
+        self, 
+        property, 
+        text_value: UndefinedType | Optional[str] = undefined, 
+        /, 
+        find_attrib: Optional[Mapping] = None, 
+        attrib: Optional[Mapping] = None, 
+        text: Optional[str] = None, 
+        merge: bool = False, 
+        delete: bool = False, 
+        auto_add: bool = False, 
+    ):
+        if find_attrib:
+            find_attrib = {**find_attrib, "property": property}
+        else:
+            find_attrib = {"property": property}
+        if text_value is not undefined:
+            find_attrib[""] = text_value
+        return self.meta(
+            find_attrib=find_attrib, 
+            attrib=attrib, 
+            text=text, 
+            merge=merge, 
+            delete=delete, 
+            auto_add=auto_add, 
+        )
+
+
+class ManifestProxy(ElementAttribProxy):
+    __optional_keys__ = ("id",)
+
 
 class Manifest(dict[str, Item]):
 
@@ -349,24 +396,26 @@ class Manifest(dict[str, Item]):
         self._root = root
         self._attrib = root.attrib
         self._epub = epub
-        self._proxy = ElementAttribProxy(root)
+        self._proxy = ManifestProxy(root)
         self._href_to_id: dict[str, str] = {}
         self._href_to_file: dict[str, File] = {}
         if len(root):
             href_to_id = self._href_to_id
-            has_dangling = False
-            for item in root.iterfind("*"):
-                try:
-                    id = cast(str, item.attrib["id"])
-                    href = cast(str, item.attrib["href"])
-                except LookupError:
-                    has_dangling = True
+            dangling_items = []
+            for item in root.iterfind("{*}item"):
+                id = item.attrib.get("id")
+                href = item.attrib.get("href")
+                if id is None or not href:
+                    dangling_items.append(item)
                     continue
-                else:
-                    super().__setitem__(id, Item(item, self))
-                    href_to_id[href] = id
-            if has_dangling:
-                root[:] = (item._root for item in self.values()) # type: ignore
+                id = cast(str, id)
+                href = cast(str, href)
+                super().__setitem__(id, Item(item, self))
+                href_to_id[href] = id
+            if dangling_items:
+                for item in reversed(dangling_items):
+                    root.remove(item)
+                    warn(f"removed a dangling item element: {item!r}")
             zfile = epub.__dict__.get("_zfile")
             opf_dir = epub._opf_dir
             if zfile:
@@ -379,6 +428,9 @@ class Manifest(dict[str, Item]):
                         href_to_file[href] = File(joinpath(self._workdir.name, str(uuid4())))
                     else:
                         href_to_file[href] = File(zpath, zfile)
+
+    def __init_subclass__(self, /, **kwargs):
+        raise TypeError("subclassing is not allowed")
 
     def __call__(self, href, /):
         try:
@@ -654,14 +706,17 @@ class Manifest(dict[str, Item]):
 
     @PyLinq.streamify
     def iter(self, /):
-        for el in self._root.iterfind("{*}item"):
+        for el in self._root.iterfind("*"):
+            if el.tag != "item" and not el.tag.endswith("}item"):
+                yield ElementProxy(el)
+                continue
             id = el.attrib.get("id")
             href = el.attrib.get("href")
             if not href:
                 if id is None or id not in self:
                     try:
                         self._root.remove(el)
-                        raise RuntimeError(f"removed a dangling item element: {el!r}")
+                        warn(f"removed a dangling item element: {el!r}")
                     except:
                         pass
                 else:
@@ -689,21 +744,30 @@ class Manifest(dict[str, Item]):
             else:
                 try:
                     self._root.remove(el)
-                    raise RuntimeError(f"removed a dangling item element: {el!r}")
+                    warn(f"removed a dangling item element: {el!r}")
                 except:
                     pass
 
-    def sort(self, key=id, reverse=False, use_backend_element=False):
-        if use_backend_element:
-            self._root[:] = sorted(self._root.iterfind("{*}item[@id][@href]"), key=key, reverse=reverse)
-        else:
-            self._root[:] = (e._root for e in sorted(self.iter(), key=key, reverse=reverse))
-        return self
+    def list(self, /):
+        return list(self.iter())
 
     #################### File System Methods #################### 
 
-    def add(self, href, /, file=None, fs=None, open_modes=None, id=None, media_type=None, attrib=None):
-        assert (href := href.strip("/"))
+    def add(
+        self, 
+        href, 
+        /, 
+        file=None, 
+        fs=None, 
+        open_modes=None, 
+        id=None, 
+        media_type=None, 
+        attrib=None, 
+    ):
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         if href in self._href_to_id:
             raise FileExistsError(errno.EEXIST, f"file exists: {href!r}")
         uid = str(uuid4())
@@ -714,10 +778,8 @@ class Manifest(dict[str, Item]):
         attrib = dict(attrib) if attrib else {}
         attrib["id"] = id
         attrib["href"] = href
-        if not media_type:
-            media_type = attrib.get("media-type")
-            if not media_type:
-                media_type = attrib["media-type"] = guess_media_type(href)
+        if media_type:
+            attrib["media-type"] = media_type
         if fs is not None:
             file = File(file, fs=fs, open_modes=open_modes)
         elif file is None:
@@ -730,11 +792,14 @@ class Manifest(dict[str, Item]):
             if test_data == b"":
                 copyfileobj(file0, open(path, "wb"))
             elif test_data == "":
+                attrib.setdefault("media-type", "text/plain")
                 copyfileobj(file0, open(path, "w"))
             else:
                 raise TypeError(f"incorrect read behavior: {file0!r}")
         else:
             file = File(file, open_modes=open_modes)
+        if not attrib.get("media-type"):
+            attrib["media-type"] = guess_media_type(href)
         item = Item(el_add(self._root, "item", attrib=attrib, namespaces=NAMESPACES), self)
         super().__setitem__(id, item)
         self._href_to_id[href] = id
@@ -749,7 +814,10 @@ class Manifest(dict[str, Item]):
         pattern = pattern.strip("/")
         if not pattern:
             return
-        dirname = dirname.strip("/")
+        if isinstance(dirname, Item):
+            dirname = posixpath.dirname(href._attrib["href"])
+        else:
+            dirname = dirname.strip("/")
         if dirname:
             dirname = re_escape(dirname)
         pattern = joinpath(dirname, *posix_glob_translate_iter(pattern))
@@ -766,7 +834,10 @@ class Manifest(dict[str, Item]):
 
     @PyLinq.streamify
     def iterdir(self, /, dirname=""):
-        dirname = dirname.strip("/")
+        if isinstance(dirname, Item):
+            dirname = posixpath.dirname(href._attrib["href"])
+        else:
+            dirname = dirname.strip("/")
         for href, id in self._href_to_id.items():
             if posixpath.dirname(href) != dirname:
                 continue
@@ -785,7 +856,10 @@ class Manifest(dict[str, Item]):
         errors=None, 
         newline=None, 
     ):
-        assert (href := href.strip("/"))
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         if mode not in OPEN_MODES:
             raise ValueError(f"invalid open mode: {mode!r}")
         href_to_file = self._href_to_file
@@ -823,17 +897,28 @@ class Manifest(dict[str, Item]):
         )
 
     def read(self, href, /):
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         with self.open(href, "rb", buffering=0) as f:
             return f.read()
 
     read_bytes = read
 
     def read_text(self, href, /, encoding=None):
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         with self.open(href, "r", encoding=encoding) as f:
             return f.read()
 
     def remove(self, href, /):
-        assert (href := href.strip("/"))
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         try:
             id = self._href_to_id.pop(href)
         except LookupError:
@@ -852,7 +937,10 @@ class Manifest(dict[str, Item]):
                 pass
 
     def rename(self, href, href_new, /):
-        assert (href := href.strip("/"))
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         assert (href_new := href_new.strip("/"))
         if href == href_new:
             return
@@ -866,7 +954,10 @@ class Manifest(dict[str, Item]):
         self._href_to_file[href_new] = self._href_to_file.pop(href, None)
 
     def replace(self, href, dest_href, /):
-        assert (href := href.strip("/"))
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         assert (dest_href := dest_href.strip("/"))
         if href not in self._href_to_id:
             raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
@@ -880,7 +971,10 @@ class Manifest(dict[str, Item]):
         return self.glob(pattern, dirname)
 
     def stat(self, href, /) -> Optional[stat_result]:
-        assert (href := href.strip("/"))
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         if href not in self._href_to_id:
             raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
         try:
@@ -892,13 +986,19 @@ class Manifest(dict[str, Item]):
         return stat()
 
     def touch(self, href, /):
-        assert (href := href.strip("/"))
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         self.open(href, "ab", buffering=0).close()
 
     unlink = remove
 
     def write(self, href, /, data):
-        assert (href := href.strip("/"))
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         if isinstance(data, File):
             with data.open("rb", buffering=0) as fsrc, self.open("wb", buffering=0) as fdst:
                 copyfileobj(fsrc, fdst)
@@ -923,9 +1023,16 @@ class Manifest(dict[str, Item]):
     write_bytes = write
 
     def write_text(self, href, /, text, encoding=None, errors=None, newline=None):
-        assert (href := href.strip("/"))
+        if isinstance(href, Item):
+            href = href._attrib["href"]
+        else:
+            assert (href := href.strip("/"))
         with self.open(href, "w", encoding=encoding, errors=errors, newline=newline) as f:
             return f.write(text)
+
+
+class SpineProxy(ElementAttribProxy):
+    __optional_keys__ = ("id", "page-progression-direction")
 
 
 class Spine(dict[str, Itemref]):
@@ -933,21 +1040,23 @@ class Spine(dict[str, Itemref]):
     def __init__(self, root: Element, /, manifest: Manifest):
         self._root = root
         self._attrib = root.attrib
-        self._proxy = ElementAttribProxy(root)
+        self._proxy = SpineProxy(root)
         self._manifest = manifest
         if len(root):
-            has_dangling = False
-            for itemref in root.iterfind("*"):
-                if itemref.tag != "itemref" and not itemref.tag.endswith("}itemref"):
-                    has_dangling = True
-                    continue
+            dangling_itemrefs = []
+            for itemref in root.iterfind("{*}itemref"):
                 idref = itemref.attrib.get("idref")
-                if idref is not None and idref in manifest:
-                    super().__setitem__(cast(str, idref), Itemref(itemref))
-                else:
-                    has_dangling = True
-            if has_dangling:
-                root[:] = (itemref._root for itemref in self.values()) # type: ignore
+                if idref is None or idref not in manifest:
+                    dangling_itemrefs.append(itemref)
+                    continue
+                super().__setitem__(cast(str, idref), Itemref(itemref))
+            if dangling_itemrefs:
+                for itemref in reversed(dangling_itemrefs):
+                    warn(f"removed a dangling item element: {itemref!r}")
+                    root.remove(itemref)
+
+    def __init_subclass__(self, /, **kwargs):
+        raise TypeError("subclassing is not allowed")
 
     def __call__(self, id, /, attrib=None):
         itemref = self.get(id)
@@ -1040,22 +1149,28 @@ class Spine(dict[str, Itemref]):
 
     @PyLinq.streamify
     def iter(self, /):
-        for el in self._root.iterfind("{*}itemref"):
-            idref = el.attrib.get("idref")
-            if idref is None or idref not in self._manifest:
-                try:
-                    self._root.remove(el)
-                    raise RuntimeError(f"removed a dangling itemref element: {el!r}")
-                except:
-                    pass
-            elif idref not in self:
-                itemref = self[idref] = Itemref(el)
-                yield itemref
+        for el in self._root.iterfind("*"):
+            if el.tag == "itemref" or el.tag.endswith("}itemref"):
+                idref = el.attrib.get("idref")
+                if idref is None or idref not in self._manifest:
+                    try:
+                        self._root.remove(el)
+                        warn(f"removed a dangling itemref element: {el!r}")
+                    except:
+                        pass
+                elif idref not in self:
+                    itemref = self[idref] = Itemref(el)
+                    yield itemref
+                else:
+                    itemref = self[idref]
+                    if itemref._root is not el:
+                        raise RuntimeError(f"different itemref elements {el!r} and {itemref._root!r} share the same id {idref!r}")
+                    yield itemref
             else:
-                itemref = self[idref]
-                if itemref._root is not el:
-                    raise RuntimeError(f"different itemref elements {el!r} and {itemref._root!r} share the same id {idref!r}")
-                yield itemref
+                yield ElementProxy(el)
+
+    def list(self, /):
+        return list(self.iter())
 
     def pop(self, id, /, default=undefined):
         if id not in self:
@@ -1088,13 +1203,6 @@ class Spine(dict[str, Itemref]):
             return self[id].merge(attrib)
         else:
             return self.add(id, attrib)
-
-    def sort(self, key=id, reverse=False, use_backend_element=False):
-        if use_backend_element:
-            self._root[:] = sorted(self._root.iterfind("{*}itemref[@idref]"), key=key, reverse=reverse)
-        else:
-            self._root[:] = (e._root for e in sorted(self.iter(), key=key, reverse=reverse))
-        return self
 
     def merge(self, id_or_attrib=None, /, **attrs):
         if isinstance(id_or_attrib, Item):
@@ -1130,6 +1238,8 @@ class Spine(dict[str, Itemref]):
 
 
 class ePub(ElementProxy):
+    __protected_keys__ = ("unique-identifier", "version")
+    __optional_keys__ = ("dir", "id", "prefix", "xml:lang")
     __cache_get_key__ = False
 
     def __init__(self, /, path=None, tempdir=None):
@@ -1174,6 +1284,9 @@ class ePub(ElementProxy):
         except:
             pass
 
+    def __getattr__(self, attr, /):
+        return getattr(self.manifest, attr)
+
     @property
     def href_to_id(self):
         return self.manifest.href_to_id
@@ -1197,22 +1310,14 @@ class ePub(ElementProxy):
     def spine(self, /):
         return Spine(el_set(self._root, "{*}spine", "spine"), self.manifest)
 
-    @property
-    def version(self, /):
-        try:
-            return self._attrib["version"]
-        except KeyError:
-            self._attrib["version"] = "3"
-            return "3"
-
-    @property
+    @proxy_property
     def identifier(self, /):
         uid = self.get("unique-identifier")
         text = lambda: f"urn:uuid:{uuid4()}"
         if uid:
-            return self.metadata.dc("identifier", find_attrib={"id": uid}, text=text, merge=True, auto_add=True).text
+            return self.metadata.dc("identifier", find_attrib={"id": uid}, text=text, merge=True, auto_add=True)
         else:
-            return self.metadata.dc("identifier", text=text, merge=True, auto_add=True).text
+            return self.metadata.dc("identifier", text=text, merge=True, auto_add=True)
 
     @identifier.setter
     def identifier(self, text, /):
@@ -1222,39 +1327,32 @@ class ePub(ElementProxy):
         else:
             self.metadata.dc("identifier", text=text, auto_add=True)
 
-    @property
+    @proxy_property
     def language(self, /):
-        return self.metadata.dc("language", text="en", merge=True, auto_add=True).text
+        return self.metadata.dc("language", text="en", merge=True, auto_add=True)
 
     @language.setter
     def language(self, text, /):
         self.metadata.dc("language", text=text, auto_add=True)
 
-    @property
+    @proxy_property
     def title(self, /):
-        return self.metadata.dc("title", text="", merge=True, auto_add=True).text
+        return self.metadata.dc("title", text="", merge=True, auto_add=True)
 
     @title.setter
     def title(self, text, /):
         self.metadata.dc("title", text=text, auto_add=True)
 
-    @property
-    def cover(self, /) -> Optional[str]:
-        meta = self.metadata.meta(find_attrib={"name": "cover"})
-        if meta is None:
-            return None
-        return meta.get("content")
-
-    @cover.setter
-    def cover(self, cover_id, /):
-        if isinstance(cover_id, Item):
-            cover_id = cover_id.id
-        if cover_id not in self.manifest:
-            raise LookupError(f"no such item id: {cover_id!r}")
-        self.metadata.meta(find_attrib={"name": "cover"}, attrib={"content": cover_id}, auto_add=True)
-
-    @property
+    @proxy_property
     def modified(self, /):
+        return self.metadata.meta(
+            find_attrib={"property": "dcterms:modified"}, 
+            text=lambda: datetime.now().strftime("%FT%XZ"), 
+            auto_add=True, 
+            merge=True, 
+        )
+
+    def mark_modified(self, /):
         return self.metadata.meta(
             find_attrib={"property": "dcterms:modified"}, 
             text=lambda: datetime.now().strftime("%FT%XZ"), 
@@ -1272,8 +1370,8 @@ class ePub(ElementProxy):
         if not path and not self._path:
             raise OSError(errno.EINVAL, "please specify a path to save")
         opf_dir, opf_name, opf_path = self._opf_dir, self._opf_name, self._opf_path
-        href_to_id = self.href_to_id
-        href_to_file = self.href_to_file
+        href_to_id = self._href_to_id
+        href_to_file = self._href_to_file
         def write_oebps():
             bad_ids = set()
             good_ids = set()
@@ -1299,7 +1397,7 @@ class ePub(ElementProxy):
                         good_ids.add(id)
                     finally:
                         fsrc.close()
-            self.modified
+            self.mark_modified()
             root = self._root
             if bad_ids:
                 root = deepcopy(root)

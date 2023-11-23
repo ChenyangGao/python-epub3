@@ -4,17 +4,15 @@
 
 [python-epub3](https://github.com/ChenyangGao/python-epub3) is a Python library for managing ePub 3 books, however it can also be used to operate ePub 2.
 
-## Installation
-
 Install through [github](https://github.com/ChenyangGao/python-epub3):
 
-```console
+```shell
 pip install git+https://github.com/ChenyangGao/python-epub3
 ```
 
 Install through [pypi](https://pypi.org/project/python-epub3/):
 
-```console
+```shell
 pip install python-epub3
 ```
 
@@ -23,10 +21,115 @@ pip install python-epub3
 ```python
 from epub3 import ePub
 
-book = ePub("test.epub")
+book = ePub("sample.epub")
 ```
 
 There is a {py:class}`epub3.ePub` class used for operating ePub files. It accepts a optional file path to the ePub file as argument.
+
+Let's the `sample.epub` with the `content.opf` file content is
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<package version="3.3" unique-identifier="pub-id" xmlns="http://www.idpf.org/2007/opf" >
+    <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+       <dc:identifier id="pub-id">urn:uuid:bb4d4afe-f787-4d21-97b8-68f6774ba342</dc:identifier>
+       <dc:title>ePub</dc:title>
+       <dc:language>en</dc:language>
+       <meta property="dcterms:modified">2989-06-04T00:00:00Z</meta>
+    </metadata>
+   <manifest>
+      <item
+          id="nav"
+          href="nav.xhtml"
+          properties="nav"
+          media-type="application/xhtml+xml"/>
+      <item
+          id="intro"
+          href="intro.xhtml"
+          media-type="application/xhtml+xml"/>
+      <item
+          id="c1"
+          href="chap1.xhtml"
+          media-type="application/xhtml+xml"/>
+      <item
+          id="c1-answerkey"
+          href="chap1-answerkey.xhtml"
+          media-type="application/xhtml+xml"/>
+      <item
+          id="c2"
+          href="chap2.xhtml"
+          media-type="application/xhtml+xml"/>
+      <item
+          id="c2-answerkey"
+          href="chap2-answerkey.xhtml"
+          media-type="application/xhtml+xml"/>
+      <item
+          id="c3"
+          href="chap3.xhtml"
+          media-type="application/xhtml+xml"/>
+      <item
+          id="c3-answerkey"
+          href="chap3-answerkey.xhtml"
+          media-type="application/xhtml+xml"/>
+      <item
+          id="notes"
+          href="notes.xhtml"
+          media-type="application/xhtml+xml"/>
+      <item
+          id="cover"
+          href="images/cover.svg"
+          properties="cover-image"
+          media-type="image/svg+xml"/>
+      <item
+          id="f1"
+          href="images/fig1.jpg"
+          media-type="image/jpeg"/>
+      <item
+          id="f2"
+          href="images/fig2.jpg"
+          media-type="image/jpeg"/>
+      <item
+          id="css"
+          href="style/book.css"
+          media-type="text/css"/>
+   </manifest>
+    <spine
+        page-progression-direction="ltr">
+    <itemref
+        idref="intro"/>
+    <itemref
+        idref="c1"/>
+    <itemref
+        idref="c1-answerkey"
+        linear="no"/>
+    <itemref
+        idref="c2"/>
+    <itemref
+        idref="c2-answerkey"
+        linear="no"/>
+    <itemref
+        idref="c3"/>
+    <itemref
+        idref="c3-answerkey"
+        linear="no"/>
+    <itemref
+        idref="notes"
+        linear="no"/>
+    </spine>
+</package>
+```
+
+### Package document
+
+The [package document](https://www.w3.org/TR/epub/#dfn-package-document) is an XML document that consists of a set of elements that each encapsulate information about a particular aspect of an [EPUB publication](https://www.w3.org/TR/epub/#dfn-epub-publication). These elements serve to centralize metadata, detail the individual resources, and provide the reading order and other information necessary for its rendering.
+
+The following list summarizes the information found in the [package](https://www.w3.org/TR/epub/#sec-package-doc) document:
+
+- [Metadata](https://www.w3.org/TR/epub/#sec-pkg-metadata) — mechanisms to include and/or reference information about the EPUB publication.
+- A [manifest](https://www.w3.org/TR/epub/#sec-manifest-elem) — identifies via URL [[url](https://www.w3.org/TR/epub/#bib-url)], and describes via MIME media type [[rfc4839](https://www.w3.org/TR/epub/#bib-rfc4839)], the set of [publication resources](https://www.w3.org/TR/epub/#dfn-publication-resource).
+- A [spine](https://www.w3.org/TR/epub/#sec-spine-elem) — an ordered sequence of ID references to top-level resources in the manifest from which [reading systems](https://www.w3.org/TR/epub/#dfn-epub-reading-system) can reach or utilize all other resources in the set. The spine defines the default reading order.
+- [Collections](https://www.w3.org/TR/epub/#sec-collection-elem) — a method of encapsulating and identifying subcomponents within the EPUB publication.
+- [Manifest fallback chains](https://www.w3.org/TR/epub/#dfn-manifest-fallback-chain) — a mechanism that defines an ordered list of top-level resources as content equivalents. A reading system can then choose between the resources based on which it is capable of rendering.
 
 ### Metadata
 
@@ -58,36 +161,36 @@ The minimal set of metadata required in the package document is defined inside o
 ```xml
 <package unique-identifier="pub-id">
     <metadata>
-       <dc:identifier id="pub-id">urn:uuid:A1B0D67E-2E81-4DF5-9E67-A64CBE366809</dc:identifier>
-       <dc:title>Norwegian Wood</dc:title>
+       <dc:identifier id="pub-id">urn:uuid:bb4d4afe-f787-4d21-97b8-68f6774ba342</dc:identifier>
+       <dc:title>ePub</dc:title>
        <dc:language>en</dc:language>
-       <meta property="dcterms:modified">2011-01-01T12:00:00Z</meta>
+       <meta property="dcterms:modified">2989-06-04T00:00:00Z</meta>
     </metadata>
 </package>
 ```
 
 ```python
 >>> book.metadata.dc('identifier')
-<{http://purl.org/dc/elements/1.1/}identifier>{'id': 'pub-id'} text='urn:uuid:A1B0D67E-2E81-4DF5-9E67-A64CBE366809'
+<DCTerm(<{http://purl.org/dc/elements/1.1/}identifier>, attrib={'id': 'BookId'}, text='urn:uuid:bb4d4afe-f787-4d21-97b8-68f6774ba342') at 0x105338210>
 
 >>> book.metadata.dc('title')
-<{http://purl.org/dc/elements/1.1/}title> text='Norwegian Wood'
+<DCTerm(<{http://purl.org/dc/elements/1.1/}title>, text='ePub') at 0x105313fd0>
 
 >>> book.metadata.dc('language')
-<{http://purl.org/dc/elements/1.1/}language> text='en'
+<DCTerm(<{http://purl.org/dc/elements/1.1/}language>, text='en') at 0x105357550>
 
 >>> book.metadata.meta('[@property="dcterms:modified"]')
-<{http://www.idpf.org/2007/opf}meta>{'property': 'dcterms:modified'} text='2011-01-01T12:00:00Z'
+<Meta(<{http://www.idpf.org/2007/opf}meta>, attrib={'property': 'dcterms:modified'}, text='2989-06-04T00:00:00Z') at 0x10532dd90>
 ```
 
 You can also use these properties to quickly obtain
 
 ```python
 >>> book.identifier
-'urn:uuid:A1B0D67E-2E81-4DF5-9E67-A64CBE366809'
+'urn:uuid:bb4d4afe-f787-4d21-97b8-68f6774ba342'
 
 >>> book.title
-'Norwegian Wood'
+'ePub'
 
 >>> book.language
 'en'
@@ -117,25 +220,39 @@ Each `meta` element defines a metadata expression. The `property` attribute take
 - A *primary expression* is one in which the expression defined in the `meta` element establishes some aspect of the [EPUB publication](https://www.w3.org/TR/epub/#dfn-epub-publication). A `meta` element that omits a refines attribute defines a primary expression.
 - A *subexpression* is one in which the expression defined in the `meta` element is associated with another expression or resource using the `refines` attribute to enhance its meaning. A subexpression might refine a media clip, for example, by expressing its duration, or refine a creator or contributor expression by defining the role of the person.
 
+```{note}
 EPUB creators *MAY* use subexpressions to refine the meaning of other subexpressions, thereby creating chains of information.
 
-```{note}
 All the [[dcterms](https://www.w3.org/TR/epub/#bib-dcterms)] elements represent primary expressions, and permit refinement by meta element subexpressions.
 ```
 
-You can also have custom metadata. For instance this is how custom metadata is defined in content.opf file. You can define same key more then once.
+```{note}
+The [Meta Properties Vocabulary](https://www.w3.org/TR/epub/#app-meta-property-vocab) is the [default vocabulary](https://www.w3.org/TR/epub/#sec-default-vocab) for use with the `property` attribute.
 
-```xml
-<meta content="my-cover-image" name="cover"/>
-<meta content="cover-image" name="cover"/>
+EPUB creators *MAY* add terms from other vocabularies as defined in [D.1 Vocabulary association mechanisms](https://www.w3.org/TR/epub/#sec-vocab-assoc).
 ```
 
-To get all covers, you can do as the following
+You can also have custom metadata. For instance this is how custom metadata is defined in `content.opf` file. You can define same key more than once.
+
+```xml
+<dc:creator id="creator">ChengyangGao</dc:creator>
+<meta refines="#creator" property="role" scheme="marc:relators">author</meta>
+<meta refines="#creator" property="file-as" scheme="marc:relators">author</meta>
+```
 
 ```python
->>> book.metadata.iterfind('meta[@name="cover"]').list()
-[<{http://www.idpf.org/2007/opf}meta>{'name': 'cover', 'content': 'my-cover-image'},
- <{http://www.idpf.org/2007/opf}meta>{'name': 'cover', 'content': 'cover-image'}]
+book.metadata.add("dc:creator", dict(id="creator"), text="ChenyangGao")
+book.metadata.add("meta", dict(refines="#creator", property="role", scheme="marc:relators", id="role"), text="author")
+book.metadata.add("meta", dict(refines="#creator", property="file-as", scheme="marc:relators", id="file-as"), text="author")
+```
+
+To get all `<meta>`, you can do as the following
+
+```python
+>>> book.metadata.iterfind('meta').list()
+[<Meta(<{http://www.idpf.org/2007/opf}meta>, attrib={'property': 'dcterms:modified'}, text='2023-11-23T21:15:49Z') at 0x10532dd90>,
+ <Meta(<{http://www.idpf.org/2007/opf}meta>, attrib={'refines': '#creator', 'property': 'role', 'scheme': 'marc:relators', 'id': 'role'}, text='author') at 0x1053ee3d0>,
+ <Meta(<{http://www.idpf.org/2007/opf}meta>, attrib={'refines': '#creator', 'property': 'file-as', 'scheme': 'marc:relators', 'id': 'file-as'}, text='author') at 0x105e15610>]
 ```
 
 ```{note}
@@ -147,6 +264,19 @@ Check the official documentation for more info:
 - [https://www.w3.org/TR/epub/#sec-pkg-metadata](https://www.w3.org/TR/epub/#sec-pkg-metadata)
 - [https://www.dublincore.org/specifications/dublin-core/dcmi-terms/](https://www.dublincore.org/specifications/dublin-core/dcmi-terms/)
 - [https://www.dublincore.org/specifications/dublin-core/dces/](https://www.dublincore.org/specifications/dublin-core/dces/)
+
+#### The `link` element
+
+The `link` element associates resources with an [EPUB publication](https://www.w3.org/TR/epub/#dfn-epub-publication), such as metadata records.
+
+The `metadata` element *MAY* contain zero or more `link` elements, each of which identifies the location of a [publication resource](https://www.w3.org/TR/epub/#dfn-publication-resource) or a [linked resource](https://www.w3.org/TR/epub/#dfn-linked-resource) in its *REQUIRED* `href` attribute.
+
+Resources referenced from the `link` element are [publication resources](https://www.w3.org/TR/epub/#dfn-publication-resource) only when they are:
+
+- referenced from the [spine](https://www.w3.org/TR/epub/#dfn-epub-spine); or
+- included or embedded in an [EPUB content document](https://www.w3.org/TR/epub/#dfn-epub-content-document) (e.g., a metadata record serialized as RDFa [[rdfa-core](https://www.w3.org/TR/epub/#bib-rdfa-core)] or as JSON-LD [[json-ld11](https://www.w3.org/TR/epub/#bib-json-ld11)] embedded in an [[html](https://www.w3.org/TR/epub/#bib-html)] `script` element).
+
+In all other cases (e.g., when linking to standalone [[onix](https://www.w3.org/TR/epub/#bib-onix)] records), the resources referenced are not [publication resources](https://www.w3.org/TR/epub/#dfn-publication-resource) (i.e., are not subject to [core media type requirements](https://www.w3.org/TR/epub/#sec-core-media-types)) and [EPUB creators](https://www.w3.org/TR/epub/#dfn-epub-creator) *MUST NOT* list them in the [manifest](https://www.w3.org/TR/epub/#sec-manifest-elem).
 
 ### Manifest
 
@@ -233,55 +363,55 @@ Each item element has 3 required attributes: `id`, `href` and `media-type`.
 
 ```python
 >>> book.manifest
-{'nav': <Item({'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x1070e7c10>,
- 'intro': <Item({'id': 'intro', 'href': 'intro.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1071d9310>,
- 'c1': <Item({'id': 'c1', 'href': 'chap1.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x111359410>,
- 'c1-answerkey': <Item({'id': 'c1-answerkey', 'href': 'chap1-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1070f6b90>,
- 'c2': <Item({'id': 'c2', 'href': 'chap2.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x10714b990>,
- 'c2-answerkey': <Item({'id': 'c2-answerkey', 'href': 'chap2-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x107166ed0>,
- 'c3': <Item({'id': 'c3', 'href': 'chap3.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x103798950>,
- 'c3-answerkey': <Item({'id': 'c3-answerkey', 'href': 'chap3-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x111a5ae50>,
- 'notes': <Item({'id': 'notes', 'href': 'notes.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x111a47710>,
- 'cover': <Item({'id': 'cover', 'href': './images/cover.svg', 'properties': 'cover-image', 'media-type': 'image/svg+xml'}) at 0x111a52790>,
- 'f1': <Item({'id': 'f1', 'href': './images/fig1.jpg', 'media-type': 'image/jpeg'}) at 0x111a45550>,
- 'f2': <Item({'id': 'f2', 'href': './images/fig2.jpg', 'media-type': 'image/jpeg'}) at 0x111a51350>,
- 'css': <Item({'id': 'css', 'href': './style/book.css', 'media-type': 'text/css'}) at 0x1105dccd0>}
+{'nav': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x105324910>,
+ 'intro': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'intro', 'href': 'intro.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105324ed0>,
+ 'c1': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c1', 'href': 'chap1.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325650>,
+ 'c1-answerkey': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c1-answerkey', 'href': 'chap1-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325790>,
+ 'c2': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c2', 'href': 'chap2.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325850>,
+ 'c2-answerkey': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c2-answerkey', 'href': 'chap2-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325f90>,
+ 'c3': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c3', 'href': 'chap3.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1053267d0>,
+ 'c3-answerkey': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c3-answerkey', 'href': 'chap3-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105327450>,
+ 'notes': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'notes', 'href': 'notes.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1053274d0>,
+ 'cover': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'cover', 'href': 'images/cover.svg', 'properties': 'cover-image', 'media-type': 'image/svg+xml'}) at 0x105327a50>,
+ 'f1': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'f1', 'href': 'images/fig1.jpg', 'media-type': 'image/jpeg'}) at 0x105355410>,
+ 'f2': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'f2', 'href': 'images/fig2.jpg', 'media-type': 'image/jpeg'}) at 0x105563c10>,
+ 'css': <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'css', 'href': 'style/book.css', 'media-type': 'text/css'}) at 0x105560a50>}
 
->>> book.manifest.iter().list()
-[<Item({'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x1070e7c10>,
- <Item({'id': 'intro', 'href': 'intro.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1071d9310>,
- <Item({'id': 'c1', 'href': 'chap1.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x111359410>,
- <Item({'id': 'c1-answerkey', 'href': 'chap1-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1070f6b90>,
- <Item({'id': 'c2', 'href': 'chap2.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x10714b990>,
- <Item({'id': 'c2-answerkey', 'href': 'chap2-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x107166ed0>,
- <Item({'id': 'c3', 'href': 'chap3.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x103798950>,
- <Item({'id': 'c3-answerkey', 'href': 'chap3-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x111a5ae50>,
- <Item({'id': 'notes', 'href': 'notes.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x111a47710>,
- <Item({'id': 'cover', 'href': './images/cover.svg', 'properties': 'cover-image', 'media-type': 'image/svg+xml'}) at 0x111a52790>,
- <Item({'id': 'f1', 'href': './images/fig1.jpg', 'media-type': 'image/jpeg'}) at 0x111a45550>,
- <Item({'id': 'f2', 'href': './images/fig2.jpg', 'media-type': 'image/jpeg'}) at 0x111a51350>,
- <Item({'id': 'css', 'href': './style/book.css', 'media-type': 'text/css'}) at 0x1105dccd0>]
+>>> book.manifest.list()
+[<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x105324910>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'intro', 'href': 'intro.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105324ed0>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c1', 'href': 'chap1.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325650>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c1-answerkey', 'href': 'chap1-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325790>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c2', 'href': 'chap2.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325850>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c2-answerkey', 'href': 'chap2-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325f90>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c3', 'href': 'chap3.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1053267d0>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c3-answerkey', 'href': 'chap3-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105327450>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'notes', 'href': 'notes.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1053274d0>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'cover', 'href': 'images/cover.svg', 'properties': 'cover-image', 'media-type': 'image/svg+xml'}) at 0x105327a50>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'f1', 'href': 'images/fig1.jpg', 'media-type': 'image/jpeg'}) at 0x105355410>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'f2', 'href': 'images/fig2.jpg', 'media-type': 'image/jpeg'}) at 0x105563c10>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'css', 'href': 'style/book.css', 'media-type': 'text/css'}) at 0x105560a50>]
 ```
 
-You can retrieve elements from the manifest in various ways.
+You can retrieve an element from the manifest in various ways.
 
 ```python
 >>> # by index
 >>> item = book.manifest[0]
 >>> item
-<Item({'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x1070e7c10>
+<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x105324910>
 
 >>> # by item (itself)
 >>> book.manifest[item]
-<Item({'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x1070e7c10>
+<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x105324910>
 
 >>> # by id (to the item)
 >>> book.manifest[item.id]
-<Item({'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x1070e7c10>
+<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x105324910>
 
 >>> # by href (to the item)
 >>> book.manifest(item.href)
-<Item({'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x1070e7c10>
+<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x105324910>
 ```
 
 You can use {py:meth}`Manifest.filter_by_attrs` to filter items by a certain attribute (default to `'media-type'`).
@@ -289,34 +419,34 @@ You can use {py:meth}`Manifest.filter_by_attrs` to filter items by a certain att
 ```python
 >>> # equal to this value: "image/jpeg"
 >>> book.manifest.filter_by_attr("image/jpeg").list()
-[<Item({'id': 'f1', 'href': './images/fig1.jpg', 'media-type': 'image/jpeg'}) at 0x111a45550>,
- <Item({'id': 'f2', 'href': './images/fig2.jpg', 'media-type': 'image/jpeg'}) at 0x111a51350>]
+[<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'f1', 'href': 'images/fig1.jpg', 'media-type': 'image/jpeg'}) at 0x105355410>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'f2', 'href': 'images/fig2.jpg', 'media-type': 'image/jpeg'}) at 0x105563c10>]
 
 >>> # starts with the specified prefix: "image"
 >>> book.manifest.filter_by_attr("^image").list()
-[<Item({'id': 'cover', 'href': './images/cover.svg', 'properties': 'cover-image', 'media-type': 'image/svg+xml'}) at 0x111a52790>,
- <Item({'id': 'f1', 'href': './images/fig1.jpg', 'media-type': 'image/jpeg'}) at 0x111a45550>,
- <Item({'id': 'f2', 'href': './images/fig2.jpg', 'media-type': 'image/jpeg'}) at 0x111a51350>]
+[<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'cover', 'href': 'images/cover.svg', 'properties': 'cover-image', 'media-type': 'image/svg+xml'}) at 0x105327a50>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'f1', 'href': 'images/fig1.jpg', 'media-type': 'image/jpeg'}) at 0x105355410>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'f2', 'href': 'images/fig2.jpg', 'media-type': 'image/jpeg'}) at 0x105563c10>]
 
 >>> # ends with the specified suffix: "xhtml+xml"
 >>> book.manifest.filter_by_attr("$xhtml+xml").list()
-[<Item({'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x1070e7c10>,
- <Item({'id': 'intro', 'href': 'intro.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1071d9310>,
- <Item({'id': 'c1', 'href': 'chap1.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x111359410>,
- <Item({'id': 'c1-answerkey', 'href': 'chap1-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1070f6b90>,
- <Item({'id': 'c2', 'href': 'chap2.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x10714b990>,
- <Item({'id': 'c2-answerkey', 'href': 'chap2-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x107166ed0>,
- <Item({'id': 'c3', 'href': 'chap3.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x103798950>,
- <Item({'id': 'c3-answerkey', 'href': 'chap3-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x111a5ae50>,
- <Item({'id': 'notes', 'href': 'notes.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x111a47710>]
+[<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x105324910>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'intro', 'href': 'intro.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105324ed0>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c1', 'href': 'chap1.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325650>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c1-answerkey', 'href': 'chap1-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325790>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c2', 'href': 'chap2.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325850>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c2-answerkey', 'href': 'chap2-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105325f90>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c3', 'href': 'chap3.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1053267d0>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'c3-answerkey', 'href': 'chap3-answerkey.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105327450>,
+ <Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'notes', 'href': 'notes.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1053274d0>]
 ```
 
 To open a file, you can use either the {py:meth}`Manifest.open` or {py:meth}`Item.open` method, which returns a file-like object, an instance of {py:class}`io.Base`.
 
 ```python
->>> item = book.manifest('nav.xhtml')
+>>> item = book.manifest("nav.xhtml")
 >>> item
-<Item({'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x1070e7c10>
+<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'nav', 'href': 'nav.xhtml', 'properties': 'nav', 'media-type': 'application/xhtml+xml'}) at 0x105324910>
 
 >>> book.manifest.open(item.href)
 <_io.TextIOWrapper name='/var/folders/k1/3r19jl7d30n834vdmbz9ygh80000gn/T/tmpjar2_4kv/4d4b73b9-61a9-4de4-b773-5ff752b920af' encoding='utf-8'>
@@ -334,7 +464,6 @@ To open a file, you can use either the {py:meth}`Manifest.open` or {py:meth}`Ite
 ### Spine
 
 The [`spine`](https://www.w3.org/TR/epub/#sec-spine-elem) element defines an ordered list of [manifest `item` references](https://www.w3.org/TR/epub/#sec-itemref-elem) that represent the default reading order.
-
 
 The `spine` *MUST* specify at least one [EPUB content document](https://www.w3.org/TR/epub/#dfn-epub-content-document) or [foreign content document](https://www.w3.org/TR/epub/#dfn-foreign-content-document).
 
@@ -358,7 +487,7 @@ The `itemref` element identifies an [EPUB content document](https://www.w3.org/T
 
 The `epub3.ePub.spine` contains a series of itemrefs that are wrapped by the {py:class}`epub3.Itemref` class.
 
-Each itemref element has a required attributes: `idref`.
+Each itemref element has a required attribute: `idref`.
 
 ```{important}
 Each `itemref` element *MUST* reference the [ID](https://www.w3.org/TR/xml/#id) [[xml](https://www.w3.org/TR/epub/#bib-xml)] of an `item` in the [manifest](https://www.w3.org/TR/epub/#dfn-epub-manifest) via the [IDREF](https://www.w3.org/TR/xml/#idref) [[xml](https://www.w3.org/TR/epub/#bib-xml)] in its `idref` attribute. `item` element IDs *MUST NOT* be referenced more than once.
@@ -398,48 +527,48 @@ Although [EPUB publications](https://www.w3.org/TR/epub/#dfn-epub-publication) [
 
 ```python
 >>> book.spine
-{'intro': <Itemref({'idref': 'intro'}) at 0x10ba7a3d0>,
- 'c1': <Itemref({'idref': 'c1'}) at 0x10ba7b610>,
- 'c1-answerkey': <Itemref({'idref': 'c1-answerkey'}) at 0x10ba78c10>,
- 'c2': <Itemref({'idref': 'c2'}) at 0x10ba7a490>,
- 'c2-answerkey': <Itemref({'idref': 'c2-answerkey'}) at 0x109981a10>,
- 'c3': <Itemref({'idref': 'c3'}) at 0x109983c50>,
- 'c3-answerkey': <Itemref({'idref': 'c3-answerkey'}) at 0x10967df50>,
- 'notes': <Itemref({'idref': 'notes'}) at 0x108ad2790>}
+{'intro': <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'intro'}) at 0x105574450>,
+ 'c1': <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c1'}) at 0x105574510>,
+ 'c1-answerkey': <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c1-answerkey'}) at 0x1055745d0>,
+ 'c2': <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c2'}) at 0x105574690>,
+ 'c2-answerkey': <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c2-answerkey'}) at 0x105574790>,
+ 'c3': <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c3'}) at 0x105574890>,
+ 'c3-answerkey': <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c3-answerkey'}) at 0x105574990>,
+ 'notes': <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'notes'}) at 0x105574a50>}
 
 >>> book.spine.iter().list()
-[<Itemref({'idref': 'intro'}) at 0x10ba7a3d0>,
- <Itemref({'idref': 'c1'}) at 0x10ba7b610>,
- <Itemref({'idref': 'c1-answerkey'}) at 0x10ba78c10>,
- <Itemref({'idref': 'c2'}) at 0x10ba7a490>,
- <Itemref({'idref': 'c2-answerkey'}) at 0x109981a10>,
- <Itemref({'idref': 'c3'}) at 0x109983c50>,
- <Itemref({'idref': 'c3-answerkey'}) at 0x10967df50>,
- <Itemref({'idref': 'notes'}) at 0x108ad2790>]
+[<Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'intro'}) at 0x105574450>,
+ <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c1'}) at 0x105574510>,
+ <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c1-answerkey'}) at 0x1055745d0>,
+ <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c2'}) at 0x105574690>,
+ <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c2-answerkey'}) at 0x105574790>,
+ <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c3'}) at 0x105574890>,
+ <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'c3-answerkey'}) at 0x105574990>,
+ <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'notes'}) at 0x105574a50>]
 ```
 
-You can retrieve elements from the spine in various ways.
+You can retrieve an element from the spine in various ways.
 
 ```python
 >>> # by index
 >>> itemref = book.spine[0]
 >>> itemref
-<Itemref({'idref': 'intro'}) at 0x10ba7a3d0>
+<Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'intro'}) at 0x105574450>
 
 >>> # by item
 >>> item = book.manifest[itemref.idref]
 >>> item
-<Item({'id': 'intro', 'href': 'intro.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x1071d9310>
+<Item(<{http://www.idpf.org/2007/opf}item>, attrib={'id': 'intro', 'href': 'intro.xhtml', 'media-type': 'application/xhtml+xml'}) at 0x105324ed0>
 >>> book.spine[item]
-<Itemref({'idref': 'intro'}) at 0x10ba7a3d0>
+<Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'intro'}) at 0x105574450>
 
 >>> # by itemref (itself)
 >>> book.spine[itemref]
-<Itemref({'idref': 'intro'}) at 0x10ba7a3d0>
+<Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'intro'}) at 0x105574450>
 
 >>> # by id (to the item)
 >>> book.manifest[itemref.idref]
-<Itemref({'idref': 'intro'}) at 0x10ba7a3d0>
+<Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'intro'}) at 0x105574450>
 ```
 
 ## Creating ePub

@@ -74,6 +74,9 @@ class Stream(Iterable):
     def __matmul__(self, other):
         return type(self)(other)
 
+    def __next__(self):
+        return next(self.iterable)
+
     def __rmatmul__(self, other):
         return type(self)(other)
 

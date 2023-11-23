@@ -10,6 +10,7 @@ hide-toc: true
 ```{toctree}
 :caption: Cookbook
 :maxdepth: 3
+:hidden:
 
 tutorial
 ```

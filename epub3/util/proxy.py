@@ -2,11 +2,13 @@
 # coding: utf-8
 
 __author__  = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["NAMESPACES", "ElementAttribProxy", "ElementProxy"]
+__all__ = ["NAMESPACES", "ElementAttribProxy", "ElementProxy", "auto_property", "proxy_property"]
 
-from functools import cached_property
-from inspect import isclass
-from typing import Final, ItemsView, Mapping, MutableMapping
+from collections import UserString
+from functools import cached_property, partial
+from inspect import isclass, signature
+from re import compile as re_compile, escape as re_escape, Pattern
+from typing import Container, Final, ItemsView, Mapping, MutableMapping, Optional
 from types import MappingProxyType
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
@@ -41,12 +43,14 @@ class CachedMeta(type):
         if "__cache_instance__" not in ns:
             if not callable(cache_cls):
                 cache_cls = next((
-                    b.__dict__["__ceche_cls__"] for b in self.__mro__
-                    if callable(b.__dict__.get("__ceche_cls__"))
+                    b.__dict__["__cache_cls__"] for b in self.__mro__
+                    if callable(b.__dict__.get("__cache_cls__"))
                 ), WeakValueDictionary)
             self.__cache_instance__ = cache_cls()
         if "__cache_state__" not in ns:
             self.__cache_state__ = WeakKeyDictionary()
+        if "__init__" in ns:
+            self.__signature__ = signature(ns["__init__"])
 
     def __call__(self, /, key=undefined, *args, **kwargs):
         if key is undefined:
@@ -149,13 +153,239 @@ class AttributeProxy(MutableMapping):
         return self
 
 
+def strip_key(key: str) -> str:
+    key = key[key.rfind("}")+1:]
+    key = key[key.rfind(":")+1:]
+    return key.replace("-", "_")
+
+
+class OperationalString(UserString):
+
+    def __add__(self, value, /):
+        if value is None:
+            return self.data
+        return self.data + str(value)
+
+    def __radd__(self, value, /):
+        if value is None:
+            return self.data
+        return str(value) + self.data
+
+    def __iadd__(self, value, /):
+        if value is not None:
+            self.data += str(value)
+
+    __or__ = __add__
+    __ror__ = __radd__
+    __ior__ = __iadd__
+
+    def __matmul__(self, value, /):
+        if value is not None:
+            self.data = str(value)
+        return self
+
+    def __mul__(self, n, /):
+        return self.data * n
+
+    __rmul__ = __mul__
+
+    def __imul__(self, n, /):
+        self.data *= n
+
+    __xor__ = __radd__
+    __rxor__ = __add__
+
+    def __ixor__(self, value, /):
+        if value is None:
+            return self.data
+        self.data = str(value) + self.data
+
+    def __lshift__(self, value, /):
+        if value is None:
+            return self.data
+        return self.data.removeprefix(str(value))
+
+    def __ilshift__(self, value, /):
+        if value is not None:
+            self.data = self.data.removeprefix(str(value))
+
+    def __rshift__(self, value, /):
+        if value is None:
+            return self.data
+        return self.data.removesuffix(str(value))
+
+    def __irshift__(self, value, /):
+        if value is not None:
+            self.data = self.data.removesuffix(str(value))
+
+    def __sub__(self, value, /):
+        if value is None:
+            return self.data
+        return self.data.replace(str(value), "")
+
+    def __isub__(self, value, /):
+        if value is not None:
+            self.data = self.data.replace(str(value), "")
+
+    def __neg__(self, /):
+        self.data = self.data.lstrip()
+
+    def __pos__(self, /):
+        self.data = self.data.rstrip()
+
+    def __invert__(self, /):
+        self.data = self.data.strip()
+
+    def __truediv__(self, value, /):
+        if value is None:
+            return self.data
+        return re_compile("^(?:%s)*" % re_escape(str(value))).sub("", self.data)
+
+    def __itruediv__(self, value, /):
+        if value is not None and (data := self.data):
+            self.data = re_compile("^(?:%s)*" % re_escape(str(value))).sub("", self.data)
+
+    def __floordiv__(self, value, /):
+        if value is None:
+            return self.data
+        return re_compile("(?:%s)*$" % re_escape(str(value))).sub("", self.data)
+
+    def __ifloordiv__(self, value, /):
+        if value is not None and (data := self.data):
+            self.data = re_compile("(?:%s)*$" % re_escape(str(value))).sub("", data)
+
+    def __mod__(self, value, /):
+        data = self.data
+        if value is None:
+            return data
+        s = "(?:%s)*" % re_escape(str(value))
+        data = re_compile("^"+s).sub("", data)
+        return re_compile(s+"$").sub("", data)
+
+    def __imod__(self, value, /):
+        if value is not None and (data := self.data):
+            s = "(?:%s)*" % re_escape(str(value))
+            data = re_compile("^"+s).sub("", data)
+            self.data = re_compile(s+"$").sub("", data)
+
+
+def auto_property(
+    key: str, 
+    setable: bool = False, 
+    delable: bool = False, 
+) -> property:
+    class AttribProxy(OperationalString, str):
+        __slots__ = ()
+        @staticmethod
+        def __init__(*args, **kwargs):
+            pass
+        @staticmethod
+        def __init_subclass__(**kwargs):
+            raise TypeError("subclassing is not allowed")
+        @staticmethod
+        def __getattr__(attr, /):
+            return attrib.get(key, "")
+        @staticmethod
+        def __delattr__():
+            try:
+                deleter(instance)
+            except UnboundLocalError:
+                raise TypeError("can't delete attribute")
+        @staticmethod
+        def __setattr__(attr, value, /):
+            try:
+                setter(instance, value)
+            except UnboundLocalError:
+                raise TypeError("can't set attribute")
+    key = resolve_prefix(key, NAMESPACES)
+    proxy = AttribProxy()
+    instance = attrib = None
+    def getter(self, /):
+        nonlocal instance, attrib
+        instance = self
+        attrib = self._attrib
+        return proxy
+    auto_property = property(getter)
+    if setable:
+        def setter(self, value, /):
+            if value is None:
+                try:
+                    deleter(self)
+                except UnboundLocalError:
+                    raise TypeError("can't delete attribute")
+            else:
+                self._attrib[key] = str(value)
+        auto_property.setter(setter)
+    if delable:
+        def deleter(self, /):
+            self._attrib.pop(key, None)
+        auto_property.deleter(deleter)
+    return auto_property
+
+
+def proxy_property(fget=None, /, attr: Optional[str] = "") -> property:
+    if fget is None:
+        return partial(cache_property, attr=attr)
+    class AttribProxy(OperationalString, str):
+        __slots__ = ()
+        @staticmethod
+        def __init__(*args, **kwargs):
+            pass
+        @staticmethod
+        def __init_subclass__(**kwargs):
+            raise TypeError("subclassing is not allowed")
+        @staticmethod
+        def __getattr__(_, /):
+            if attr is None:
+                return root.tail or ""
+            elif attr == "":
+                return root.text or ""
+            return attrib.get(attr, "")
+        @staticmethod
+        def __delattr__():
+            deleter()
+        @staticmethod
+        def __matmul__(value, /):
+            setter(value)
+            return self
+        @staticmethod
+        def __setattr__(_, value, /):
+            setter(value)
+    if attr:
+        attr = resolve_prefix(attr, NAMESPACES)
+    proxy = AttribProxy()
+    root = attrib = None
+    def getter(self, /):
+        nonlocal root, attrib
+        inst = fget(self)
+        root = inst._root
+        attrib = root.attrib
+        return proxy
+    def setter(value, /):
+        if value is None:
+            deleter()
+        elif attr is None:
+            root.tail = str(value)
+        elif attr == "":
+            root.text = str(value)
+        else:
+            attrib[attr] = str(value)
+    def deleter():
+        if attr is None:
+            root.tail = None
+        elif attr == "":
+            root.text = None
+        else:
+            attrib.pop(attr, None)
+    return property(getter)
+
+
 @MutableMapping.register
 class ElementAttribProxy(metaclass=CachedMeta):
     __const_keys__: tuple[str, ...] = ()
     __protected_keys__: tuple[str, ...] = ()
     __cache_check_key__ = lambda obj: isinstance(obj, Element)
-    __is_wrap_class__ = True
-    __ceche_cls__ = WeakKeyDictionary if USE_BUILTIN_XML else WeakValueDictionary
+    __cache_cls__ = WeakKeyDictionary if USE_BUILTIN_XML else WeakValueDictionary
 
     def __init__(self, root, /):
         self._root = root
@@ -194,6 +424,33 @@ class ElementAttribProxy(metaclass=CachedMeta):
             self.__cache_get_state__ = get_state
         if callable(set_state):
             self.__cache_set_state__ = set_state
+        namespaces = cls.__dict__
+        const_keys = namespaces.get("__const_keys__")
+        if const_keys:
+            for key in const_keys:
+                stripped_key = strip_key(key)
+                if stripped_key not in namespaces:
+                    setattr(cls, stripped_key, auto_property(key))
+        protected_keys = namespaces.get("__protected_keys__")
+        if protected_keys:
+            for key in protected_keys:
+                stripped_key = strip_key(key)
+                if stripped_key not in namespaces:
+                    setattr(cls, stripped_key, auto_property(key, setable=True))
+        optional_keys = namespaces.get("__optional_keys__")
+        if optional_keys:
+            for key in optional_keys:
+                stripped_key = strip_key(key)
+                if stripped_key not in namespaces:
+                    setattr(cls, stripped_key, auto_property(key, setable=True, delable=True))
+        if "__wrap_class__" not in namespaces:
+            for base_cls in cls.__mro__:
+                if "__wrap_class__" in base_cls.__dict__:
+                    cls.__wrap_class__ = base_cls.__wrap_class__
+                    break
+                elif cls.__dict__.get("__is_wrap_class__"):
+                    cls.__wrap_class__ = base_cls
+                    break
 
     def __contains__(self, key, /):
         if not isinstance(key, str) or not key:
@@ -221,10 +478,9 @@ class ElementAttribProxy(metaclass=CachedMeta):
 
     def __getitem__(self, key, /):
         if isinstance(key, (int, slice)):
-            wrap_cls = next(cls for cls in type(self).__mro__ if cls.__dict__.get("__is_wrap_class__"))
             if isinstance(key, int):
-                return wrap_cls(self._root[key])
-            return list(map(wrap_cls, self._root[key]))
+                return type(self).wrap(self._root[key])
+            return list(map(type(self).wrap, self._root[key]))
         elif isinstance(key, str):
             if not key:
                 raise ValueError("empty key not allowed")
@@ -254,7 +510,38 @@ class ElementAttribProxy(metaclass=CachedMeta):
         return self
 
     def __repr__(self, /):
-        return f"<{type(self).__qualname__}({self._attrib!r}) at {hex(id(self))}>"
+        attrib = self._attrib
+        attrib = f", {attrib=!r}" if attrib else ""
+        return f"<{type(self).__qualname__}(<{self._root.tag}>{attrib}) at {hex(id(self))}>"
+
+    @classmethod
+    def wrap(cls, root, /):
+        wrap_class_map = cls.__dict__.get("__wrap_class_map__")
+        if not wrap_class_map:
+            return cls.__wrap_class__(root)
+        for pred, wrap_class in wrap_class_map.items():
+            if isinstance(pred, str):
+                if pred.startswith("{*}"):
+                    if pred[3:] == root.tag or root.tag.endswith(pred[2:]):
+                        return wrap_class(root)
+                elif pred.startswith("{}"):
+                    if pred[2:] == root.tag:
+                        return wrap_class(root)
+                elif pred.endswith(":*"):
+                    if root.tag.startswith(pred[:-1]) or root.tag.startswith(resolve_prefix(pred[:-1], NAMESPACES)):
+                        return wrap_class(root)
+                elif root.tag == pred or root.tag == resolve_prefix(pred, NAMESPACES):
+                    return wrap_class(root)
+            elif isinstance(pred, Pattern):
+                if pred.search(root.tag) is not None:
+                    return wrap_class(root)
+            elif isinstance(pred, Container):
+                if root.tag in pred:
+                    return wrap_class(root)
+            elif callable(pred):
+                if pred(root):
+                    return wrap_class(root)
+        return cls.__wrap_class__(root)
 
     @cached_property
     def attrib(self, /):
@@ -270,8 +557,10 @@ class ElementAttribProxy(metaclass=CachedMeta):
 
     @PyLinq.streamify
     def iter(self, /):
-        wrap_cls = next(cls for cls in type(self).__mro__ if cls.__dict__.get("__is_wrap_class__"))
-        return map(wrap_cls, self._root.iterfind("*"))
+        return map(type(self).wrap, self._root.iterfind("*"))
+
+    def list(self, /):
+        return list(self.iter())
 
     def keys(self, /):
         return self._attrib.keys()
@@ -365,17 +654,20 @@ class ElementAttribProxy(metaclass=CachedMeta):
             el_set(self._root, attrib=attrib, namespaces=NAMESPACES, merge=False)
         return self
 
+ElementAttribProxy.__wrap_class__ = ElementAttribProxy
+
 
 class ElementProxy(ElementAttribProxy):
     __is_wrap_class__ = True
 
     def __repr__(self, /):
-        attrib = self._attrib or ""
+        attrib = self._attrib
+        attrib = f", {attrib=!r}" if attrib else ""
         text = self.text
-        text = f" {text=!r}" if text and text.strip() else ""
+        text = f", {text=!r}" if text and text.strip() else ""
         tail = self.tail
-        tail = f" {tail=!r}" if tail and tail.strip() else ""
-        return f"<{self.tag}>{attrib}{text}{tail}"
+        tail = f", {tail=!r}" if tail and tail.strip() else ""
+        return f"<{type(self).__qualname__}(<{self._root.tag}>{attrib}{text}{tail}) at {hex(id(self))}>"
 
     @property
     def length(self, /):
@@ -416,8 +708,7 @@ class ElementProxy(ElementAttribProxy):
         return self
 
     def add(self, name, /, attrib=None, text=None, tail=None):
-        wrap_cls = next(cls for cls in type(self).__mro__ if cls.__dict__.get("__is_wrap_class__"))
-        return wrap_cls(el_add(self._root, name=name, attrib=attrib, text=text, tail=tail, namespaces=NAMESPACES))
+        return type(self).wrap(el_add(self._root, name=name, attrib=attrib, text=text, tail=tail, namespaces=NAMESPACES))
 
     def delete(self, path, /):
         el_del(self._root, path, namespaces=NAMESPACES)
@@ -428,10 +719,7 @@ class ElementProxy(ElementAttribProxy):
 
     @PyLinq.streamify
     def iterfind(self, path, /):
-        return map(
-            next(cls for cls in type(self).__mro__ if cls.__dict__.get("__is_wrap_class__")), 
-            el_iterfind(self._root, path, NAMESPACES), 
-        )
+        return map(type(self).wrap, el_iterfind(self._root, path, NAMESPACES))
 
     def set(
         self, 
@@ -454,7 +742,7 @@ class ElementProxy(ElementAttribProxy):
             merge=merge, 
         )
         if el is not None:
-            return next(cls for cls in type(self).__mro__ if cls.__dict__.get("__is_wrap_class__"))(el)
+            return type(self).wrap(el)
 
     def setfind(
         self, 
@@ -481,5 +769,5 @@ class ElementProxy(ElementAttribProxy):
             auto_add=auto_add, 
         )
         if el is not None:
-            return next(cls for cls in type(self).__mro__ if cls.__dict__.get("__is_wrap_class__"))(el)
+            return type(self).wrap(el)
 
