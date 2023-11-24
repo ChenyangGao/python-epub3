@@ -2,7 +2,7 @@
 
 ## Introduction
 
-[python-epub3](https://github.com/ChenyangGao/python-epub3) is a Python library for managing ePub 3 books, however it can also be used to operate ePub 2.
+[python-epub3](https://github.com/ChenyangGao/python-epub3) is a Python library for managing ePub 3 books, even though it can also be used to operate ePub 2.
 
 Install through [github](https://github.com/ChenyangGao/python-epub3):
 
@@ -16,7 +16,7 @@ Install through [pypi](https://pypi.org/project/python-epub3/):
 pip install python-epub3
 ```
 
-## Opening ePub
+## Reading ePub
 
 ```python
 from epub3 import ePub
@@ -26,7 +26,7 @@ book = ePub("sample.epub")
 
 There is a {py:class}`epub3.ePub` class used for operating ePub files. It accepts a optional file path to the ePub file as argument.
 
-Let's the `sample.epub` with the `content.opf` file content is
+Let's say the `sample.epub` with the `content.opf` file content is
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -250,7 +250,7 @@ To get all `<meta>`, you can do as the following
 
 ```python
 >>> book.metadata.iterfind('meta').list()
-[<Meta(<{http://www.idpf.org/2007/opf}meta>, attrib={'property': 'dcterms:modified'}, text='2023-11-23T21:15:49Z') at 0x10532dd90>,
+[<Meta(<{http://www.idpf.org/2007/opf}meta>, attrib={'property': 'dcterms:modified'}, text='2989-06-04T00:00:00Z') at 0x10532dd90>,
  <Meta(<{http://www.idpf.org/2007/opf}meta>, attrib={'refines': '#creator', 'property': 'role', 'scheme': 'marc:relators', 'id': 'role'}, text='author') at 0x1053ee3d0>,
  <Meta(<{http://www.idpf.org/2007/opf}meta>, attrib={'refines': '#creator', 'property': 'file-as', 'scheme': 'marc:relators', 'id': 'file-as'}, text='author') at 0x105e15610>]
 ```
@@ -571,6 +571,6 @@ You can retrieve an element from the spine in various ways.
 <Itemref(<{http://www.idpf.org/2007/opf}itemref>, attrib={'idref': 'intro'}) at 0x105574450>
 ```
 
-## Creating ePub
+## Writing ePub
 
 ...

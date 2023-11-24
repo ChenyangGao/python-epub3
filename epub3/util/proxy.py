@@ -2,7 +2,7 @@
 # coding: utf-8
 
 __author__  = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["NAMESPACES", "ElementAttribProxy", "ElementProxy", "auto_property", "proxy_property"]
+__all__ = ["NAMESPACES", "PREFIXES", "ElementAttribProxy", "ElementProxy", "auto_property", "proxy_property"]
 
 from collections import UserString
 from functools import cached_property, partial
@@ -13,10 +13,10 @@ from types import MappingProxyType
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
 try:
-    from lxml.etree import SubElement, _Element as Element, _ElementTree as ElementTree # type: ignore
+    from lxml.etree import register_namespace, _Element as Element, _ElementTree as ElementTree # type: ignore
     USE_BUILTIN_XML = False
 except ModuleNotFoundError:
-    from xml.etree.ElementTree import SubElement, Element, ElementTree # type: ignore
+    from xml.etree.ElementTree import register_namespace, Element, ElementTree # type: ignore
     USE_BUILTIN_XML = True
 
 from .helper import items
@@ -26,14 +26,43 @@ from .xml import el_add, el_del, el_iterfind, el_set, el_setfind, resolve_prefix
 
 
 NAMESPACES: Final = {
-    "xml": "http://www.w3.org/XML/1998/namespace", 
-    "epub": "http://www.idpf.org/2007/ops", 
-    "daisy": "http://www.daisy.org/z3986/2005/ncx/", 
-    "opf": "http://www.idpf.org/2007/opf", 
     "containerns": "urn:oasis:names:tc:opendocument:xmlns:container", 
+    "daisy": "http://www.daisy.org/z3986/2005/ncx/", 
     "dc": "http://purl.org/dc/elements/1.1/", 
+    "ds": "http://www.w3.org/2000/09/xmldsig#", 
+    "epub": "http://www.idpf.org/2007/ops", 
+    "enc": "http://www.w3.org/2001/04/xmlenc#",
+    "ncx": "http://www.daisy.org/z3986/2005/ncx/", 
+    "ns": "http://www.idpf.org/2016/encryption#compression", 
+    "opf": "http://www.idpf.org/2007/opf", 
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#", 
+    "smil": "http://www.w3.org/ns/SMIL", 
+    "svg": "http://www.w3.org/2000/svg", 
+    "html": "http://www.w3.org/1999/xhtml", 
+    "wsdl": "http://schemas.xmlsoap.org/wsdl/", 
     "xhtml": "http://www.w3.org/1999/xhtml", 
+    "xml": "http://www.w3.org/XML/1998/namespace", 
+    "xs": "http://www.w3.org/2001/XMLSchema", 
+    "xsi": "http://www.w3.org/2001/XMLSchema-instance", 
 }
+# See: https://www.w3.org/TR/epub/#sec-reserved-prefixes
+PREFIXES: Final = {
+    # Package document reserved prefixes
+    "a11y": "http://www.idpf.org/epub/vocab/package/a11y/#", 
+    "dcterms": "http://purl.org/dc/terms/", 
+    "marc": "http://id.loc.gov/vocabulary/", 
+    "media": "http://www.idpf.org/epub/vocab/overlays/#", 
+    "onix": "http://www.editeur.org/ONIX/book/codelists/current.html#", 
+    "rendition": "http://www.idpf.org/vocab/rendition/#", 
+    "schema": "http://schema.org/", 
+    "xsd": "http://www.w3.org/2001/XMLSchema#", 
+    # Other reserved prefixes
+    "msv": "http://www.idpf.org/epub/vocab/structure/magazine/#", 
+    "prism": "http://www.prismstandard.org/specifications/3.0/PRISM_CV_Spec_3.0.htm#", 
+}
+
+for prefix, uri in NAMESPACES.items():
+    register_namespace(prefix, uri)
 
 
 class CachedMeta(type):
@@ -85,10 +114,11 @@ class CachedMeta(type):
         return val
 
 
-class AttributeProxy(MutableMapping):
+class AttrInfoProxy(MutableMapping):
+    __slots__ = ("__backend__",)
 
     def __init__(self, backend, /):
-        self.__backend__ = backend
+        super().__setattr__("__backend__", backend)
 
     def __contains__(self, key, /):
         return key in self.__backend__
@@ -105,6 +135,9 @@ class AttributeProxy(MutableMapping):
 
     def __len__(self, /):
         return len(self.__backend__)
+
+    def __setattr__(self, attr, value, /):
+        raise TypeError("can't set any attributes")
 
     def __setitem__(self, key, value, /):
         self.__backend__[key] = value
@@ -151,6 +184,49 @@ class AttributeProxy(MutableMapping):
     def update(self, attrib=None, /, **attrs):
         self.__backend__.update(attrib, **attrs)
         return self
+
+
+class ElementInfoProxy(MutableMapping):
+    __slots__ = ("__backend__",)
+
+    def __init__(self, backend, /):
+        super().__setattr__("__backend__", backend)
+
+    def __repr__(self, /):
+        return "{%s}" % ", ".join("%r: %r" %t for t in zip(("tag", "attrib", "text", "tail"), self))
+
+    def __contains__(self, key, /):
+        return key in ("tag", "attrib", "text", "tail")
+
+    def __iter__(self, /):
+        backend = self.__backend__
+        return (getattr(backend, key) for key in ("tag", "attrib", "text", "tail"))
+
+    def __len__(self, /):
+        return 4
+
+    def __delitem__(self, key, /):
+        if key in ("text", "tail"):
+            setattr(self.__backend__, key, None)
+        elif key in ("tag", "attrib"):
+            raise TypeError(f"can't set key: {key!r}")
+        else:
+            raise KeyError(key)
+
+    def __getitem__(self, key, /):
+        if key in ("tag", "attrib", "text", "tail"):
+            return getattr(self.__backend__, key)
+        raise KeyError(key)
+
+    def __setitem__(self, key, value, /):
+        if key in ("text", "tail"):
+            setattr(self.__backend__, key, value)
+        else:
+            raise TypeError(f"can't set key: {key!r}")
+
+    __delattr__ = __delitem__
+    __getattr__ = __getitem__
+    __setattr__ = __setitem__
 
 
 def strip_key(key: str) -> str:
@@ -274,7 +350,7 @@ def auto_property(
     setable: bool = False, 
     delable: bool = False, 
 ) -> property:
-    class AttribProxy(OperationalString, str):
+    class AttribProxy(OperationalString, str): # type: ignore
         __slots__ = ()
         @staticmethod
         def __init__(*args, **kwargs):
@@ -326,7 +402,7 @@ def auto_property(
 def proxy_property(fget=None, /, attr: Optional[str] = "") -> property:
     if fget is None:
         return partial(cache_property, attr=attr)
-    class AttribProxy(OperationalString, str):
+    class AttribProxy(OperationalString, str):  # type: ignore
         __slots__ = ()
         @staticmethod
         def __init__(*args, **kwargs):
@@ -545,11 +621,15 @@ class ElementAttribProxy(metaclass=CachedMeta):
 
     @cached_property
     def attrib(self, /):
-        return AttributeProxy(self)
+        return AttrInfoProxy(self)
 
     @property
     def nsmap(self, /):
         return self._nsmap
+
+    @cached_property
+    def info(self, /):
+        return MappingProxyType({"attrib": self.attrib})
 
     @property
     def proxy(self, /):
@@ -693,6 +773,10 @@ class ElementProxy(ElementAttribProxy):
     def tail(self, text, /):
         self._root.tail = text
 
+    @cached_property
+    def info(self, /):
+        return ElementInfoProxy(self)
+
     def clear(self, /):
         self._root.clear()
         return self
@@ -711,7 +795,13 @@ class ElementProxy(ElementAttribProxy):
         return type(self).wrap(el_add(self._root, name=name, attrib=attrib, text=text, tail=tail, namespaces=NAMESPACES))
 
     def delete(self, path, /):
-        el_del(self._root, path, namespaces=NAMESPACES)
+        if isinstance(path, ElementAttribProxy):
+            try:
+                self._root.remove(path._root)
+            except:
+                pass
+        else:
+            el_del(self._root, path, namespaces=NAMESPACES)
         return self
 
     def find(self, path, /):

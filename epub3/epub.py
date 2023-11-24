@@ -3,7 +3,7 @@
 
 __author__  = "ChenyangGao <https://chenyanggao.github.io>"
 __version__ = (0, 0, 1)
-__all__ = ["ePub", "Metadata", "Manifest", "Item", "Link", "Spine", "Itemref"]
+__all__ = ["ePub", "Metadata", "DCTerm", "Meta", "Link", "Manifest", "Item", "Spine", "Itemref"]
 
 import errno
 import io
@@ -15,7 +15,7 @@ from copy import deepcopy
 from datetime import datetime
 from fnmatch import translate as wildcard_translate
 from functools import cached_property, partial
-from inspect import isclass
+from inspect import getfullargspec, isclass
 from io import IOBase, TextIOWrapper
 from operator import methodcaller
 from os import fsdecode, remove, stat, stat_result, PathLike
@@ -24,15 +24,14 @@ from posixpath import join as joinpath
 from pprint import pformat
 from re import compile as re_compile, escape as re_escape, Pattern
 from shutil import copy, copyfileobj
-from tempfile import TemporaryDirectory
 from typing import cast, Any, Callable, Mapping, MutableMapping, Optional
 from types import MappingProxyType
 from uuid import uuid4
 from warnings import warn
 from weakref import WeakKeyDictionary, WeakValueDictionary
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import ZipFile, ZIP_STORED
 
-from .util.file import File, OPEN_MODES
+from .util.file import File, RootFS, TemporaryFS, OPEN_MODES
 from .util.helper import guess_media_type, items
 from .util.proxy import proxy_property, ElementAttribProxy, ElementProxy, NAMESPACES
 from .util.stream import PyLinq
@@ -45,7 +44,18 @@ except ModuleNotFoundError:
     from xml.etree.ElementTree import fromstring, tostring, Element, ElementTree # type: ignore
 
 
-TemporaryDirectory.__del__ = TemporaryDirectory.cleanup # type: ignore
+class DCTerm(ElementProxy):
+    pass
+
+
+class Meta(ElementProxy):
+    __protected_keys__ = ("property",)
+    __optional_keys__ = ("dir", "id", "refines", "scheme", "xml:lang")
+
+
+class Link(ElementAttribProxy):
+    __protected_keys__ = ("href", "rel")
+    __optional_keys__ = ("hreflang", "id", "media-type", "properties", "refines")
 
 
 class Item(ElementAttribProxy):
@@ -239,20 +249,6 @@ class Item(ElementAttribProxy):
         return self._manifest.write_text(self._attrib["href"], text, encoding=encoding, errors=errors, newline=newline)
 
 
-class DCTerm(ElementProxy):
-    pass
-
-
-class Meta(ElementProxy):
-    __protected_keys__ = ("property",)
-    __optional_keys__ = ("dir", "id", "refines", "scheme", "xml:lang")
-
-
-class Link(ElementAttribProxy):
-    __protected_keys__ = ("href", "rel")
-    __optional_keys__ = ("hreflang", "id", "media-type", "properties", "refines")
-
-
 class Itemref(ElementAttribProxy):
     __const_keys__ = ("idref",)
     __optional_keys__ = ("id", "linear", "properties")
@@ -271,6 +267,10 @@ class Metadata(ElementProxy):
 
     def __repr__(self, /):
         return f"{super().__repr__()}\n{pformat(self.iter().list())}"
+
+    @property
+    def info(self, /):
+        return tuple(meta.info for meta in self.iter())
 
     def add(
         self, 
@@ -425,9 +425,9 @@ class Manifest(dict[str, Item]):
                     zinfo = zfile.NameToInfo.get(zpath)
                     if not zinfo or zinfo.is_dir():
                         warn(f"missing file in original epub: {href!r}")
-                        href_to_file[href] = File(joinpath(self._workdir.name, str(uuid4())))
+                        href_to_file[href] = File(str(uuid4()), self._workdir)
                     else:
-                        href_to_file[href] = File(zpath, zfile)
+                        href_to_file[href] = File(zpath, zfile, open_modes="r")
 
     def __init_subclass__(self, /, **kwargs):
         raise TypeError("subclassing is not allowed")
@@ -443,12 +443,6 @@ class Manifest(dict[str, Item]):
         if isinstance(other, Item):
             return other._manifest is self and other.id in self
         return super().__contains__(other)
-
-    def __del__(self, /):
-        try:
-            self.__dict__["_workdir"].cleanup()
-        except:
-            pass
 
     def __delitem__(self, key, /):
         pop = self.pop
@@ -486,7 +480,7 @@ class Manifest(dict[str, Item]):
         elif isinstance(value, bytes):
             self.write(self[id].href, value)
         elif isinstance(value, PathLike):
-            self._href_to_file[self[id].href] = File(value)
+            self._href_to_file[self[id].href] = File(value, open_modes="rb")
         elif isinstance(value, Mapping):
             self[id].update(value)
         else:
@@ -495,7 +489,10 @@ class Manifest(dict[str, Item]):
 
     @cached_property
     def _workdir(self, /):
-        return TemporaryDirectory(self._epub._tempdir)
+        if self._epub._maketemp:
+            return TemporaryFS(self._epub._workroot)
+        else:
+            return RootFS(self._epub._workroot)
 
     @cached_property
     def href_to_id(self, /):
@@ -516,6 +513,12 @@ class Manifest(dict[str, Item]):
     @property
     def proxy(self, /):
         return self._proxy
+
+    @property
+    def info(self, /):
+        return tuple(item.info for item in self.values())
+
+    delete = __delitem__
 
     def clear(self, /):
         self._root.clear()
@@ -583,7 +586,7 @@ class Manifest(dict[str, Item]):
             if id not in self:
                 raise LookupError(f"no such item id: {id!r}")
             item = self[id]
-            self._href_to_file[item.href] = File(value)
+            self._href_to_file[item.href] = File(value, open_modes="rb")
             return item
         elif isinstance(value, Mapping):
             if id in self:
@@ -730,12 +733,7 @@ class Manifest(dict[str, Item]):
             if not el.attrib.get("media-type"):
                 el.attrib["media-type"] = guess_media_type(href)
             if id is None:
-                id = str(uuid4())
-                item = Item(el, self)
-                super().__setitem__(id, item)
-                self._href_to_id[href] = id
-                self._href_to_file[href] = File(ospath.join(self._workdir.name, id))
-                yield item
+                yield self.add(href)
             elif id in self:
                 item = self[id]
                 if item._root is not el:
@@ -759,7 +757,7 @@ class Manifest(dict[str, Item]):
         /, 
         file=None, 
         fs=None, 
-        open_modes=None, 
+        open_modes="r", 
         id=None, 
         media_type=None, 
         attrib=None, 
@@ -772,8 +770,12 @@ class Manifest(dict[str, Item]):
             raise FileExistsError(errno.EEXIST, f"file exists: {href!r}")
         uid = str(uuid4())
         if id is None:
-            id = uid
-        elif id in self:
+            generate_id = self._epub._generate_id
+            if generate_id is None:
+                id = uid
+            else:
+                id = generate_id(href, self.keys())
+        if id in self:
             raise LookupError(f"id already exists: {id!r}")
         attrib = dict(attrib) if attrib else {}
         attrib["id"] = id
@@ -783,17 +785,16 @@ class Manifest(dict[str, Item]):
         if fs is not None:
             file = File(file, fs=fs, open_modes=open_modes)
         elif file is None:
-            file = File(ospath.join(self._workdir.name, uid))
+            file = File(uid, self._workdir)
         elif isinstance(file, IOBase) or hasattr(file, "read") and not hasattr(file, "open"):
             file0 = file
-            path = ospath.join(self._workdir.name, uid)
-            file = File(path)
+            file = File(uid, self._workdir)
             test_data = file0.read(0)
             if test_data == b"":
-                copyfileobj(file0, open(path, "wb"))
+                copyfileobj(file0, self._workdir.open(uid, "wb"))
             elif test_data == "":
                 attrib.setdefault("media-type", "text/plain")
-                copyfileobj(file0, open(path, "w"))
+                copyfileobj(file0, self._workdir.open(uid, "w"))
             else:
                 raise TypeError(f"incorrect read behavior: {file0!r}")
         else:
@@ -867,10 +868,10 @@ class Manifest(dict[str, Item]):
             if "x" in mode:
                 raise FileExistsError(errno.EEXIST, f"file exists: {href!r}")
             file = href_to_file.get(href)
+            uid = str(uuid4())
             if file is None:
-                href_to_file[href] = file = File(ospath.join(self._workdir.name, str(uuid4())))
+                href_to_file[href] = file = File(uid, self._workdir)
             elif not file.check_open_mode(mode):
-                path_dst = ospath.join(self._workdir.name, str(uuid4()))
                 if "w" not in mode:
                     try:
                         fsrc = file.open("rb", buffering=0)
@@ -879,8 +880,8 @@ class Manifest(dict[str, Item]):
                             raise
                     else:
                         with fsrc:
-                            copyfileobj(fsrc, open(path_dst, "wb"))
-                href_to_file[href] = file = File(path_dst)
+                            copyfileobj(fsrc, self._workdir.open(uid, "wb"))
+                href_to_file[href] = file = File(uid, self._workdir)
         elif "r" in mode:
             raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
         else:
@@ -1124,6 +1125,12 @@ class Spine(dict[str, Itemref]):
     def proxy(self, /):
         return self._proxy
 
+    @property
+    def info(self, /):
+        return tuple(itemref.info for itemref in self.values())
+
+    delete = __delitem__
+
     def _add(self, id, /, attrib=None):
         if attrib:
             attrib = dict(attrib, idref=id)
@@ -1242,7 +1249,7 @@ class ePub(ElementProxy):
     __optional_keys__ = ("dir", "id", "prefix", "xml:lang")
     __cache_get_key__ = False
 
-    def __init__(self, /, path=None, tempdir=None):
+    def __init__(self, /, path=None, workroot=None, maketemp=True, generate_id=None):
         if path and ospath.lexists(path):
             self._zfile = zfile = ZipFile(path)
             contenter_xml = zfile.read("META-INF/container.xml")
@@ -1273,7 +1280,21 @@ class ePub(ElementProxy):
 })
         super().__init__(root)
         self._path = path
-        self._tempdir = tempdir
+        self._workroot = workroot
+        self._maketemp = maketemp
+        if generate_id is None:
+            self._generate_id = None
+        else:
+            try:
+                argcount = generate_id.__code__.co_argcount
+            except AttributeError:
+                argcount = len(getfullargspec(generate_id).args)
+            if argcount == 0:
+                self._generate_id = lambda href, seen_ids: generate_id()
+            elif argcount == 1:
+                self._generate_id = lambda href, seen_ids: generate_id(href)
+            else:
+                self._generate_id = generate_id
         self.metadata
         self.manifest
         self.spine
@@ -1286,14 +1307,6 @@ class ePub(ElementProxy):
 
     def __getattr__(self, attr, /):
         return getattr(self.manifest, attr)
-
-    @property
-    def href_to_id(self):
-        return self.manifest.href_to_id
-
-    @property
-    def href_to_file(self):
-        return self.manifest.href_to_file
 
     @cached_property
     def metadata(self, /):
@@ -1309,6 +1322,14 @@ class ePub(ElementProxy):
     @cached_property
     def spine(self, /):
         return Spine(el_set(self._root, "{*}spine", "spine"), self.manifest)
+
+    @property
+    def info(self, /):
+        return MappingProxyType({
+            "metadata": MappingProxyType({"attrib": self.metadata.attrib, "children": self.metadata.info}), 
+            "manifest": MappingProxyType({"attrib": self.manifest.attrib, "children": self.manifest.info}), 
+            "spine": MappingProxyType({"attrib": self.spine.attrib, "children": self.spine.info}), 
+        })
 
     @proxy_property
     def identifier(self, /):
@@ -1359,19 +1380,62 @@ class ePub(ElementProxy):
             auto_add=True, 
         ).text
 
+    @property
+    def cover(self, /):
+        for item in self.manifest.filter_by_attr("cover-image", "properties"):
+            return item
+        cover_meta = self.metadata.name_meta("cover")
+        if cover_meta is None:
+            return None
+        cover_id = cover_meta.get("content")
+        return self.manifest.get(cover_id)
+
+    @property
+    def toc(self, /):
+        for item in self.manifest.filter_by_attr("nav", "properties"):
+            return item
+        toc_id = self.spine.attrib.get("toc")
+        if toc_id is None:
+            return None
+        return self.manifest.get(toc_id)
+
+    @property
+    def creators(self, /):
+        return tuple(self.metadata.iterfind("dc:creator"))
+
+    def add_creator(self, creator, attrib=None, file_as=None, role=None):
+        dcterm = self.metadata.add("dc:creator", attrib=attrib, text=creator)
+        id = dcterm.get("id")
+        if id is None and not (file_as is role is None):
+            id = str(uuid4())
+            dcterm["id"] = id
+        if file_as is not None:
+            self.metadata.add(text=file_as, attrib={
+                "refines": f"#{id}", 
+                "property": "file-as", 
+                "scheme": "marc:relators", 
+            })
+        if role is not None:
+            self.metadata.add(text=role, attrib={
+                "refines": f"#{id}", 
+                "property": "role", 
+                "scheme": "marc:relators", 
+            })
+        return dcterm
+
     def pack(
         self, 
         /, 
         path=None, 
-        compression=ZIP_DEFLATED, 
+        compression=ZIP_STORED, 
         allowZip64=True, 
         compresslevel=None, 
     ):
         if not path and not self._path:
             raise OSError(errno.EINVAL, "please specify a path to save")
         opf_dir, opf_name, opf_path = self._opf_dir, self._opf_name, self._opf_path
-        href_to_id = self._href_to_id
-        href_to_file = self._href_to_file
+        href_to_id = self.manifest.href_to_id
+        href_to_file = self.manifest.href_to_file
         def write_oebps():
             bad_ids = set()
             good_ids = set()

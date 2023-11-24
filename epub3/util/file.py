@@ -2,18 +2,24 @@
 # coding: utf-8
 
 __author__  = "ChenyangGao <https://chenyanggao.github.io>"
-__all__ = ["OPEN_MODES", "File"]
+__all__ = ["OPEN_MODES", "File", "RootFS", "TemporaryFS"]
 
+import errno
 import io
 import os
 import os.path as ospath
+import posixpath
 import shutil
 
-from functools import partial
+from functools import partial, update_wrapper
 from inspect import isclass, signature, _ParameterKind
 from io import BufferedReader, BufferedWriter, BufferedRandom, TextIOWrapper, DEFAULT_BUFFER_SIZE
 from itertools import permutations, product
 from os import PathLike
+from tempfile import TemporaryDirectory
+from typing import Mapping
+from uuid import uuid4
+from warnings import warn
 
 
 OPEN_MODES = frozenset(
@@ -34,6 +40,15 @@ CONTAINS_ALL: frozenset = type("ContainsALL", (frozenset,), {
 KEYWORD_ONLY = _ParameterKind.KEYWORD_ONLY
 POSITIONAL_OR_KEYWORD = _ParameterKind.POSITIONAL_OR_KEYWORD
 VAR_KEYWORD = _ParameterKind.VAR_KEYWORD
+
+
+def get_any_callable(getter, *keys):
+    for key in keys:
+        try:
+            if callable(fn := getter(key)):
+                return fn
+        except (LookupError, AttributeError):
+            pass
 
 
 class File:
@@ -60,7 +75,7 @@ class File:
         name = cls.__qualname__
         if module != "__main__":
             name = module + "." + name
-        return "%s(%s)" % (name, ",".join("%s=%r" % (k, getattr(self, k)) for k in cls.__slots__))
+        return "%s(%s)" % (name, ", ".join("%s=%r" % (k, getattr(self, k)) for k in cls.__slots__))
 
     def __delattr__(self, attr):
         raise TypeError("can't delete any attributes")
@@ -117,10 +132,9 @@ class File:
         if "mode" not in open_keywords or open_modes == "":
             open_modes = frozenset()
         elif open_modes is None:
-            if use_io_open:
-                open_modes = type(self).ALL_MODES
-            else:
-                open_modes = frozenset("r")
+            open_modes = type(self).ALL_MODES
+        elif use_io_open:
+            open_modes = frozenset(open_modes) & type(self).ALL_MODES | frozenset("rb")
         else:
             open_modes = frozenset(open_modes) & type(self).ALL_MODES | frozenset("r")
         super().__setattr__("open_modes", open_modes)
@@ -220,4 +234,185 @@ class File:
             if open_modes and frozenset("rwxa+") & set(mode) - open_modes:
                 return False
         return True
+
+
+class RootFS:
+
+    def __init__(self, root=None, /, joinpath=None):
+        none_root = root is None
+        if not none_root and callable(open := getattr(root, "open", None)):
+            _getattr = partial(getattr, root)
+        elif not none_root and callable(open := root["open"]):
+            _getattr = root.__getitem__
+        elif none_root or isinstance(root, (bytes, str, PathLike)):
+            self._fs = None
+            if root is None:
+                self._root = os.getcwd()
+            else:
+                self._root = ospath.realpath(root)
+                if ospath.isfile(root):
+                    raise NotADirectoryError(errno.ENOTDIR, root)
+            self._joinpath = ospath.join
+            self._open = io.open
+            return
+        if joinpath is None:
+            joinpath = get_any_callable(_getattr, "joinpath", "join") or posixpath.join
+        self._fs = root
+        self._root = ""
+        self._getattr = _getattr
+        self._joinpath = joinpath
+        self._open = open
+
+    def __repr__(self, /):
+        return f"<{type(self).__qualname__}({self._root!r}) at {hex(id(self))}>"
+
+    def _getattr(self, attr, /):
+        try:
+            return getattr(os, attr)
+        except AttributeError:
+            try:
+                return getattr(ospath, attr)
+            except AttributeError:
+                return getattr(shutil, attr)
+
+    def __getattr__(self, attr, /):
+        try:
+            val = self._getattr(attr)
+        except (AttributeError, LookupError) as e:
+            raise AttributeError(attr) from e
+        if not callable(val):
+            return val
+        if isclass(val) or isinstance(val, staticmethod):
+            return val
+        def wrapper(name, /, *args, **kwargs):
+            return val(self.joinpath(name), *args, **kwargs)
+        return update_wrapper(wrapper, val)
+
+    @property
+    def name(self, /):
+        return self._root
+
+    @property
+    def root(self, /):
+        return self._root
+
+    def joinpath(self, /, *paths):
+        return self._joinpath(self._root, *paths)
+
+    def open(
+        self, 
+        name, 
+        /, 
+        mode='r', 
+        buffering=-1, 
+        encoding=None, 
+        errors=None, 
+        newline=None, 
+    ):
+        return self._open(
+            self.joinpath(name), 
+            mode=mode, 
+            buffering=buffering, 
+            encoding=encoding, 
+            errors=errors, 
+            newline=newline, 
+        )
+
+
+class TemporaryFS(RootFS):
+
+    def __init__(self, root=None, /, joinpath=None):
+        none_root = root is None
+        if not none_root and callable(open := getattr(root, "open", None)):
+            _getattr = partial(getattr, root)
+        elif not none_root and callable(open := root["open"]):
+            _getattr = root.__getitem__
+        elif none_root or isinstance(root, (bytes, str, PathLike)):
+            self._fs = None
+            temdir = TemporaryDirectory(dir=root)
+            self._root = temdir.name
+            self._joinpath = ospath.join
+            self._open = io.open
+            self._cleanup = temdir.cleanup
+            return
+        else:
+            raise TypeError(f"can't get `open` method from: {fs!r}")
+        if joinpath is None:
+            joinpath = get_any_callable(_getattr, "joinpath", "join") or posixpath.join
+        self._fs = root
+        self._root = root = ""
+        self._getattr = _getattr
+        self._joinpath = joinpath
+        self.open = open
+        remove = get_any_callable(_getattr, "remove", "rm")
+        if remove is None:
+            warn(f"can't get `remove` and `rm` methods from: {fs!r}")
+            self.remove = lambda *args, **kwargs: None
+            self._cleanup = lambda: None
+            return
+        self.remove = remove
+        mkdir = get_any_callable(_getattr, "mkdir", "makedir")
+        if mkdir is not None:
+            name = str(uuid4())
+            try:
+                mkdir(name)
+            except:
+                warn(f"can't make temporary directory: {name!r} on {fs!r}")
+            else:
+                self._root = root = name
+        if root:
+            rmtree = get_any_callable(_getattr, "rmtree", "removetree")
+            if rmtree is not None:
+                def _open(path, *args, **kwargs):
+                    return open(joinpath(root, path), *args, **kwargs)
+                self.open = update_wrapper(_open, open)
+                def _remove(path):
+                    remove(joinpath(root, path))
+                self.remove = update_wrapper(_remove, remove)
+                self._cleanup = lambda: rmtree(root)
+                return
+        created = set()
+        def _open(path, mode="r", **kwargs):
+            path = joinpath(root, path)
+            file = open(path, mode=mode, **kwargs)
+            if "r" not in mode:
+                created.add(path)
+            return file
+        self.open = update_wrapper(_open, open)
+        def _remove(path):
+            path = joinpath(root, path)
+            remove(path)
+            created.discard(path)
+        self.remove = update_wrapper(_remove, remove)
+        rmdir = get_any_callable(_getattr, "rmdir", "removedir")
+        def _cleanup():
+            for path in tuple(created):
+                try:
+                    remove(path)
+                except:
+                    pass
+            if root and rmdir is not None:
+                try:
+                    rmdir(root)
+                except:
+                    pass
+        self._cleanup = _cleanup
+
+    def __repr__(self, /):
+        return f"<{type(self).__qualname__}({self._fs!r}) {self._root!r} at {hex(id(self))}>"
+
+    def __del__(self, /):
+        self.cleanup()
+
+    def __enter__(self, /):
+        return self
+
+    def __exit__(self, exc, value, tb, /):
+        self.cleanup()
+
+    def cleanup(self, /):
+        try:
+            self._cleanup()
+        except:
+            pass
 
