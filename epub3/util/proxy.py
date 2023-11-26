@@ -127,6 +127,9 @@ class AttrInfoProxy(MutableMapping):
         del self.__backend__[key]
         return self
 
+    def __getattr__(self, attr):
+        return getattr(self.__backend__, attr)
+
     def __getitem__(self, key, /):
         return self.__backend__[key]
 
@@ -257,8 +260,7 @@ class OperationalString(UserString):
     __ior__ = __iadd__
 
     def __matmul__(self, value, /):
-        if value is not None:
-            self.data = str(value)
+        self.data = value
         return self
 
     def __mul__(self, n, /):
@@ -371,13 +373,13 @@ def auto_property(
         def __init_subclass__(**kwargs):
             raise TypeError("subclassing is not allowed")
         @staticmethod
-        def __getattr__(attr, /): # type: ignore
+        def __getattr__(_, /): # type: ignore
             if key is None:
-                return root.tail or ""
+                return instance.tail or ""
             elif key == "":
-                return root.text or ""
+                return instance.text or ""
             else:
-                return attrib.get(key, "")
+                return instance.get(key, "")
         @staticmethod
         def __delattr__(): # type: ignore
             try:
@@ -385,7 +387,7 @@ def auto_property(
             except UnboundLocalError:
                 raise TypeError("can't delete attribute")
         @staticmethod
-        def __setattr__(attr, value, /): # type: ignore
+        def __setattr__(_, value, /): # type: ignore
             try:
                 setter(instance, value)
             except UnboundLocalError:
@@ -393,48 +395,40 @@ def auto_property(
     if key:
         key = resolve_prefix(key, NAMESPACES)
     proxy = AttribProxy()
-    instance = attrib = root = None
+    instance = None
     def getter(self, /):
-        nonlocal instance, attrib, root
+        nonlocal instance
         instance = self
-        attrib = self._attrib
-        root = self._root
         return proxy
     auto_property = property(getter)
     if setable:
         def setter(self, value, /):
-            if value is None:
-                try:
-                    deleter(self)
-                except UnboundLocalError:
-                    raise TypeError("can't delete attribute")
+            if key is None:
+                self.tail = value
+            elif key == "":
+                self.text = value
             else:
-                if key is None:
-                    self._root.tail = value if value is None else str(value)
-                elif key == "":
-                    self._root.text = value if value is None else str(value)
-                else:
-                    self._attrib[key] = str(value)
-        auto_property.setter(setter)
+                self[key] = value
+        auto_property = auto_property.setter(setter)
     if delable:
         def deleter(self, /):
             if key is None:
-                self._root.tail = None
+                self.tail = None
             elif key == "":
-                self._root.text = None
+                self.text = None
             else:
-                self._attrib.pop(key, None)
-        auto_property.deleter(deleter)
+                self.pop(key, None)
+        auto_property = auto_property.deleter(deleter)
     return auto_property
 
 
 @overload
-def proxy_property(fget: None, /, attr: Optional[str] = "") -> Callable[[Callable], property]: ...
+def proxy_property(fget: None, /, key: Optional[str] = "") -> Callable[[Callable], property]: ...
 @overload
-def proxy_property(fget: Callable, /, attr: Optional[str] = "") -> property: ...
-def proxy_property(fget=None, /, attr = ""):
+def proxy_property(fget: Callable, /, key: Optional[str] = "") -> property: ...
+def proxy_property(fget=None, /, key = ""):
     if fget is None:
-        return partial(proxy_property, attr=attr)
+        return partial(proxy_property, key=key)
     class AttribProxy(OperationalString, str):  # type: ignore
         __slots__ = ()
         @staticmethod
@@ -445,47 +439,40 @@ def proxy_property(fget=None, /, attr = ""):
             raise TypeError("subclassing is not allowed")
         @staticmethod
         def __getattr__(_, /): # type: ignore
-            if attr is None:
-                return root.tail or ""
-            elif attr == "":
-                return root.text or ""
-            return attrib.get(attr, "")
+            if key is None:
+                return instance.tail or ""
+            elif key == "":
+                return instance.text or ""
+            else:
+                return instance.get(key, "")
         @staticmethod
         def __delattr__(): # type: ignore
             deleter()
         @staticmethod
-        def __matmul__(value, /): # type: ignore
-            setter(value)
-            return self
-        @staticmethod
         def __setattr__(_, value, /): # type: ignore
             setter(value)
-    if attr:
-        attr = resolve_prefix(attr, NAMESPACES)
+    if key:
+        key = resolve_prefix(key, NAMESPACES)
     proxy = AttribProxy()
-    root = attrib = None
+    instance = None
     def getter(self, /):
-        nonlocal root, attrib
-        inst = fget(self)
-        root = inst._root
-        attrib = root.attrib
+        nonlocal instance
+        instance = fget(self)
         return proxy
     def setter(value, /):
-        if value is None:
-            deleter()
-        elif attr is None:
-            root.tail = str(value)
-        elif attr == "":
-            root.text = str(value)
+        if key is None:
+            instance.tail = value
+        elif key == "":
+            instance.text = value
         else:
-            attrib[attr] = str(value)
+            instance[key] = value
     def deleter():
-        if attr is None:
-            root.tail = None
-        elif attr == "":
-            root.text = None
+        if key is None:
+            instance.tail = None
+        elif key == "":
+            instance.text = None
         else:
-            attrib.pop(attr, None)
+            instance.pop(key, None)
     return property(getter)
 
 
@@ -573,7 +560,6 @@ class ElementAttribProxy(metaclass=CachedMeta):
         elif isinstance(key, str):
             if not key:
                 raise ValueError("empty key not allowed")
-            key = resolve_prefix(key, self._nsmap, NAMESPACES)
             if key in self.__const_keys__ or key in self.__protected_keys__:
                 raise LookupError(f"not allowed to delete key: {key}")
             del self._attrib[key]
@@ -587,14 +573,14 @@ class ElementAttribProxy(metaclass=CachedMeta):
         return self._root is other._root
 
     def __getitem__(self, key, /):
-        if isinstance(key, (int, slice)):
-            if isinstance(key, int):
-                return type(self).wrap(self._root[key])
-            return list(map(type(self).wrap, self._root[key]))
-        elif isinstance(key, str):
+        if isinstance(key, str):
             if not key:
                 raise ValueError("empty key not allowed")
             return self._attrib[resolve_prefix(key, self._nsmap, NAMESPACES)]
+        elif isinstance(key, (int, slice)):
+            if isinstance(key, int):
+                return type(self).wrap(self._root[key])
+            return list(map(type(self).wrap, self._root[key]))
         else:
             raise TypeError("only accept `key` type: int, slice and str")
 
@@ -608,15 +594,17 @@ class ElementAttribProxy(metaclass=CachedMeta):
     def __len__(self, /):
         return len(self._attrib)
 
-    def __setitem__(self, key, val, /):
+    def __setitem__(self, key, value, /):
         if not isinstance(key, str):
-            raise TypeError("only accept `key` type: str")
+            raise TypeError("only accept `key` type: `str`")
         if not key:
             raise ValueError("empty key not allowed")
-        key = resolve_prefix(key, self._nsmap, NAMESPACES)
-        if key in self.__const_keys__:
-            raise LookupError(f"not allowed to set key: {key!r}")
-        self._attrib[key] = val
+        if value is None:
+            self.pop(key, None)
+        else:
+            if key in self.__const_keys__:
+                raise LookupError(f"not allowed to set key: {key!r}")
+            self._attrib[key] = str(value)
         return self
 
     def __repr__(self, /):
@@ -702,7 +690,7 @@ class ElementAttribProxy(metaclass=CachedMeta):
         attrib = self._attrib
         if const_keys or protected_keys:
             for key in tuple(attrib):
-                if key in __const_keys__ or key in protected_keys:
+                if key in const_keys or key in protected_keys:
                     continue
                 del attrib[key]
         else:
@@ -711,19 +699,21 @@ class ElementAttribProxy(metaclass=CachedMeta):
 
     def get(self, key, /, default=None):
         try:
-            return self[key]
+            return self._attrib[key]
         except LookupError:
             return default
 
     def pop(self, key, /, default=undefined):
+        if key in self.__const_keys__ or key in self.__protected_keys__:
+            raise LookupError(f"not allowed to delete key: {key}") 
         try:
-            r = self[key]
+            r = self._attrib[key]
         except LookupError:
             if default is undefined:
                 raise
             return default
         else:
-            del self[key]
+            del self._attrib[key]
             return r
 
     def popitem(self, /):
@@ -739,9 +729,9 @@ class ElementAttribProxy(metaclass=CachedMeta):
         if not isinstance(key, str):
             raise TypeError("only accept `key` type: str")
         try:
-            return self[key]
+            return seself._attriblf[key]
         except LookupError:
-            self[key] = default
+            self._attrib[key] = default
             return default
 
     def sort(self, key=id, reverse=False, use_backend_element=False):
@@ -813,7 +803,7 @@ class ElementProxy(ElementAttribProxy):
 
     @text.setter
     def text(self, text, /):
-        self._root.text = text
+        self._root.text = None if text is None else str(text)
 
     @property
     def tail(self, /):
@@ -821,7 +811,7 @@ class ElementProxy(ElementAttribProxy):
 
     @tail.setter
     def tail(self, text, /):
-        self._root.tail = text
+        self._root.tail = None if text is None else str(text)
 
     @cached_property
     def info(self, /):

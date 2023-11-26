@@ -81,11 +81,13 @@ class Item(ElementAttribProxy):
     def __hash__(self, /):
         return hash((self._root, id(self._manifest)))
 
-    def __setitem__(self, key, val, /):
+    def __setitem__(self, key, value, /):
         if key == "href":
+            if value is None:
+                raise ValueError("can't set href to None")
             self.rename(val)
         else:
-            super().__setitem__(key, val)
+            super().__setitem__(key, value)
         return self
 
     @property
@@ -161,13 +163,13 @@ class Item(ElementAttribProxy):
         return self.path.relative_to(*other)
 
     def with_name(self, /, name):
-        return self.path.with_name(name)
+        return self.path.with_name(str(name))
 
     def with_stem(self, /, stem):
-        return self.path.with_stem(stem)
+        return self.path.with_stem(str(stem))
 
     def with_suffix(self, /, suffix):
-        return self.path.with_suffix(suffix)
+        return self.path.with_suffix(str(suffix))
 
     def exists(self, /):
         return self._manifest.exists(self)
