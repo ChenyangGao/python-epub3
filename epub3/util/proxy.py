@@ -8,7 +8,7 @@ from collections import UserString
 from functools import cached_property, partial
 from inspect import isclass, signature
 from re import compile as re_compile, escape as re_escape, Pattern
-from typing import Container, Final, ItemsView, Mapping, MutableMapping, Optional
+from typing import overload, Callable, Container, Final, ItemsView, Mapping, MutableMapping, Optional
 from types import MappingProxyType
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
@@ -250,6 +250,7 @@ class OperationalString(UserString):
     def __iadd__(self, value, /):
         if value is not None:
             self.data += str(value)
+        return self
 
     __or__ = __add__
     __ror__ = __radd__
@@ -267,6 +268,7 @@ class OperationalString(UserString):
 
     def __imul__(self, n, /):
         self.data *= n
+        return self
 
     __xor__ = __radd__
     __rxor__ = __add__
@@ -275,6 +277,7 @@ class OperationalString(UserString):
         if value is None:
             return self.data
         self.data = str(value) + self.data
+        return self
 
     def __lshift__(self, value, /):
         if value is None:
@@ -284,6 +287,7 @@ class OperationalString(UserString):
     def __ilshift__(self, value, /):
         if value is not None:
             self.data = self.data.removeprefix(str(value))
+        return self
 
     def __rshift__(self, value, /):
         if value is None:
@@ -293,6 +297,7 @@ class OperationalString(UserString):
     def __irshift__(self, value, /):
         if value is not None:
             self.data = self.data.removesuffix(str(value))
+        return self
 
     def __sub__(self, value, /):
         if value is None:
@@ -302,15 +307,19 @@ class OperationalString(UserString):
     def __isub__(self, value, /):
         if value is not None:
             self.data = self.data.replace(str(value), "")
+        return self
 
     def __neg__(self, /):
         self.data = self.data.lstrip()
+        return self
 
     def __pos__(self, /):
         self.data = self.data.rstrip()
+        return self
 
     def __invert__(self, /):
         self.data = self.data.strip()
+        return self
 
     def __truediv__(self, value, /):
         if value is None:
@@ -320,6 +329,7 @@ class OperationalString(UserString):
     def __itruediv__(self, value, /):
         if value is not None and (data := self.data):
             self.data = re_compile("^(?:%s)*" % re_escape(str(value))).sub("", self.data)
+        return self
 
     def __floordiv__(self, value, /):
         if value is None:
@@ -329,6 +339,7 @@ class OperationalString(UserString):
     def __ifloordiv__(self, value, /):
         if value is not None and (data := self.data):
             self.data = re_compile("(?:%s)*$" % re_escape(str(value))).sub("", data)
+        return self
 
     def __mod__(self, value, /):
         data = self.data
@@ -343,10 +354,11 @@ class OperationalString(UserString):
             s = "(?:%s)*" % re_escape(str(value))
             data = re_compile("^"+s).sub("", data)
             self.data = re_compile(s+"$").sub("", data)
+        return self
 
 
 def auto_property(
-    key: str, 
+    key: Optional[str] = None, 
     setable: bool = False, 
     delable: bool = False, 
 ) -> property:
@@ -359,27 +371,34 @@ def auto_property(
         def __init_subclass__(**kwargs):
             raise TypeError("subclassing is not allowed")
         @staticmethod
-        def __getattr__(attr, /):
-            return attrib.get(key, "")
+        def __getattr__(attr, /): # type: ignore
+            if key is None:
+                return root.tail or ""
+            elif key == "":
+                return root.text or ""
+            else:
+                return attrib.get(key, "")
         @staticmethod
-        def __delattr__():
+        def __delattr__(): # type: ignore
             try:
                 deleter(instance)
             except UnboundLocalError:
                 raise TypeError("can't delete attribute")
         @staticmethod
-        def __setattr__(attr, value, /):
+        def __setattr__(attr, value, /): # type: ignore
             try:
                 setter(instance, value)
             except UnboundLocalError:
                 raise TypeError("can't set attribute")
-    key = resolve_prefix(key, NAMESPACES)
+    if key:
+        key = resolve_prefix(key, NAMESPACES)
     proxy = AttribProxy()
-    instance = attrib = None
+    instance = attrib = root = None
     def getter(self, /):
-        nonlocal instance, attrib
+        nonlocal instance, attrib, root
         instance = self
         attrib = self._attrib
+        root = self._root
         return proxy
     auto_property = property(getter)
     if setable:
@@ -390,18 +409,32 @@ def auto_property(
                 except UnboundLocalError:
                     raise TypeError("can't delete attribute")
             else:
-                self._attrib[key] = str(value)
+                if key is None:
+                    self._root.tail = value if value is None else str(value)
+                elif key == "":
+                    self._root.text = value if value is None else str(value)
+                else:
+                    self._attrib[key] = str(value)
         auto_property.setter(setter)
     if delable:
         def deleter(self, /):
-            self._attrib.pop(key, None)
+            if key is None:
+                self._root.tail = None
+            elif key == "":
+                self._root.text = None
+            else:
+                self._attrib.pop(key, None)
         auto_property.deleter(deleter)
     return auto_property
 
 
-def proxy_property(fget=None, /, attr: Optional[str] = "") -> property:
+@overload
+def proxy_property(fget: None, /, attr: Optional[str] = "") -> Callable[[Callable], property]: ...
+@overload
+def proxy_property(fget: Callable, /, attr: Optional[str] = "") -> property: ...
+def proxy_property(fget=None, /, attr = ""):
     if fget is None:
-        return partial(cache_property, attr=attr)
+        return partial(proxy_property, attr=attr)
     class AttribProxy(OperationalString, str):  # type: ignore
         __slots__ = ()
         @staticmethod
@@ -411,21 +444,21 @@ def proxy_property(fget=None, /, attr: Optional[str] = "") -> property:
         def __init_subclass__(**kwargs):
             raise TypeError("subclassing is not allowed")
         @staticmethod
-        def __getattr__(_, /):
+        def __getattr__(_, /): # type: ignore
             if attr is None:
                 return root.tail or ""
             elif attr == "":
                 return root.text or ""
             return attrib.get(attr, "")
         @staticmethod
-        def __delattr__():
+        def __delattr__(): # type: ignore
             deleter()
         @staticmethod
-        def __matmul__(value, /):
+        def __matmul__(value, /): # type: ignore
             setter(value)
             return self
         @staticmethod
-        def __setattr__(_, value, /):
+        def __setattr__(_, value, /): # type: ignore
             setter(value)
     if attr:
         attr = resolve_prefix(attr, NAMESPACES)
@@ -462,6 +495,7 @@ class ElementAttribProxy(metaclass=CachedMeta):
     __protected_keys__: tuple[str, ...] = ()
     __cache_check_key__ = lambda obj: isinstance(obj, Element)
     __cache_cls__ = WeakKeyDictionary if USE_BUILTIN_XML else WeakValueDictionary
+    __wrap_class__: "type[ElementAttribProxy]"
 
     def __init__(self, root, /):
         self._root = root
@@ -619,6 +653,17 @@ class ElementAttribProxy(metaclass=CachedMeta):
                     return wrap_class(root)
         return cls.__wrap_class__(root)
 
+    def getproxy(self, key, /):
+        if not key:
+            return
+        key = resolve_prefix(key, self._nsmap, NAMESPACES)
+        namespaces = type(self).__dict__
+        const_keys = namespaces.get("__const_keys__")
+        protected_keys = namespaces.get("__protected_keys__")
+        setable = not (const_keys and key in const_keys)
+        delable = setable and not (protected_keys and key in protected_keys)
+        return auto_property(key, setable=setable, delable=delable).fget(self)
+
     @cached_property
     def attrib(self, /):
         return AttrInfoProxy(self)
@@ -748,6 +793,11 @@ class ElementProxy(ElementAttribProxy):
         tail = self.tail
         tail = f", {tail=!r}" if tail and tail.strip() else ""
         return f"<{type(self).__qualname__}(<{self._root.tag}>{attrib}{text}{tail}) at {hex(id(self))}>"
+
+    def getproxy(self, key="", /):
+        if not key:
+            return auto_property(key, setable=True, delable=True).fget(self)
+        return super().getproxy(key)
 
     @property
     def length(self, /):

@@ -20,20 +20,22 @@ from io import IOBase, TextIOWrapper
 from operator import methodcaller
 from os import fsdecode, remove, stat, stat_result, PathLike
 from pathlib import PurePosixPath
-from posixpath import join as joinpath
+from posixpath import join as joinpath, normpath
 from pprint import pformat
 from re import compile as re_compile, escape as re_escape, Pattern
 from shutil import copy, copyfileobj
-from typing import cast, Any, Callable, Mapping, MutableMapping, Optional
+from typing import cast, Any, Callable, Container, Mapping, MutableMapping, Optional
 from types import MappingProxyType
 from uuid import uuid4
 from warnings import warn
 from weakref import WeakKeyDictionary, WeakValueDictionary
+from urllib.parse import quote, unquote
 from zipfile import ZipFile, ZIP_STORED
 
 from .util.file import File, RootFS, TemporaryFS, OPEN_MODES
-from .util.helper import guess_media_type, items
+from .util.helper import guess_media_type, values, items
 from .util.proxy import proxy_property, ElementAttribProxy, ElementProxy, NAMESPACES
+from .util.remap import remap_links
 from .util.stream import PyLinq
 from .util.xml import el_add, el_del, el_iterfind, el_set
 from .util.undefined import undefined, UndefinedType
@@ -71,10 +73,10 @@ class Item(ElementAttribProxy):
     def __eq__(self, other, /):
         if type(self) is not type(other):
             return NotImplemented
-        return self._manifest is other._manifest and self._attrib["href"] == other.href
+        return self._manifest is other._manifest and self._attrib["href"] == other._attrib["href"]
 
     def __fspath__(self, /):
-        return self._attrib["href"]
+        return unquote(self._attrib["href"])
 
     def __hash__(self, /):
         return hash((self._root, id(self._manifest)))
@@ -88,7 +90,7 @@ class Item(ElementAttribProxy):
 
     @property
     def filename(self, /):
-        return joinpath(self.home, self._attrib["href"])
+        return joinpath(self.home, self)
 
     @property
     def home(self, /):
@@ -100,7 +102,11 @@ class Item(ElementAttribProxy):
 
     @property
     def path(self, /):
-        return PurePosixPath(self._attrib["href"])
+        return PurePosixPath(self)
+
+    @property
+    def _parent(self, /):
+        return posixpath.dirname(unquote(self._attrib["href"]))
 
     @property
     def parent(self, /):
@@ -149,7 +155,7 @@ class Item(ElementAttribProxy):
     __truediv__ = joinpath
 
     def relpath(self, other, /):
-        return PurePosixPath(posixpath.relpath(other, posixpath.dirname(self._attrib["href"])))
+        return PurePosixPath(posixpath.relpath(other, self._parent))
 
     def relative_to(self, /, *other):
         return self.path.relative_to(*other)
@@ -164,7 +170,7 @@ class Item(ElementAttribProxy):
         return self.path.with_suffix(suffix)
 
     def exists(self, /):
-        return self._manifest.exists(self._attrib["href"])
+        return self._manifest.exists(self)
 
     def is_file(self, /):
         return self.exists()
@@ -176,13 +182,13 @@ class Item(ElementAttribProxy):
         return False
 
     def glob(self, /, pattern="*", ignore_case=False):
-        return self._manifest.glob(pattern, posixpath.dirname(self._attrib["href"]), ignore_case=ignore_case)
+        return self._manifest.glob(pattern, self, ignore_case=ignore_case)
 
     def rglob(self, /, pattern="", ignore_case=False):
-        return self._manifest.rglob(pattern, posixpath.dirname(self._attrib["href"]), ignore_case=ignore_case)
+        return self._manifest.rglob(pattern, self, ignore_case=ignore_case)
 
     def iterdir(self, /):
-        return self._manifest.iterdir(posixpath.dirname(self._attrib["href"]))
+        return self._manifest.iterdir(self)
 
     def match(self, /, path_pattern, ignore_case=False):
         path_pattern = path_pattern.strip("/")
@@ -203,7 +209,7 @@ class Item(ElementAttribProxy):
         newline=None, 
     ):
         return self._manifest.open(
-            self._attrib["href"], 
+            self,  
             mode=mode, 
             buffering=buffering, 
             encoding=encoding, 
@@ -211,42 +217,44 @@ class Item(ElementAttribProxy):
             newline=newline, 
         )
 
-    def read(self, /):
-        return self._manifest.read(self._attrib["href"])
+    def read(self, /, buffering=0):
+        return self._manifest.read(self, buffering=buffering)
 
     read_bytes = read
 
     def read_text(self, /, encoding=None):
-        return self._manifest.read_text(self._attrib["href"], encoding=encoding)
+        return self._manifest.read_text(self, encoding=encoding)
 
     def remove(self, /):
-        self._manifest.remove(self._attrib["href"])
+        self._manifest.remove(self)
         return self
 
-    def rename(self, href_new, /):
-        self._manifest.rename(self._attrib["href"], href_new)
-        return self
+    def rename(self, dest_href, /, repair=False):
+        return self._manifest.rename(self, dest_href, repair=repair)
+
+    def batch_rename(self, mapper, /, predicate=None, repair=False):
+        return self._manifest.batch_rename(self, mapper, predicate=predicate, repair=repair)
 
     def replace(self, href, /):
-        self._manifest.replace(self._attrib["href"], href)
+        self._manifest.replace(self, href)
         return self
 
     def stat(self, /) -> Optional[stat_result]:
-        return self._manifest.stat(self._attrib["href"])
+        return self._manifest.stat(self)
 
     def touch(self, /):
-        self._manifest.touch(self._attrib["href"])
+        self._manifest.touch(self)
         return self
 
     unlink = remove
 
     def write(self, /, data):
-        return self._manifest.write(self._attrib["href"], data)
+        return self._manifest.write(self, data)
 
     write_bytes = write
 
     def write_text(self, /, text, encoding=None, errors=None, newline=None):
-        return self._manifest.write_text(self._attrib["href"], text, encoding=encoding, errors=errors, newline=newline)
+        return self._manifest.write_text(self, text, encoding=encoding, errors=errors, newline=newline)
 
 
 class Itemref(ElementAttribProxy):
@@ -409,7 +417,7 @@ class Manifest(dict[str, Item]):
                     dangling_items.append(item)
                     continue
                 id = cast(str, id)
-                href = cast(str, href)
+                href = cast(str, unquote(href))
                 super().__setitem__(id, Item(item, self))
                 href_to_id[href] = id
             if dangling_items:
@@ -425,7 +433,7 @@ class Manifest(dict[str, Item]):
                     zinfo = zfile.NameToInfo.get(zpath)
                     if not zinfo or zinfo.is_dir():
                         warn(f"missing file in original epub: {href!r}")
-                        href_to_file[href] = File(str(uuid4()), self._workdir)
+                        href_to_file[href] = File(str(uuid4()), self._workfs)
                     else:
                         href_to_file[href] = File(zpath, zfile, open_modes="r")
 
@@ -433,62 +441,105 @@ class Manifest(dict[str, Item]):
         raise TypeError("subclassing is not allowed")
 
     def __call__(self, href, /):
+        if isinstance(href, Item):
+            if href not in self:
+                raise LookupError(f"no such item: {href!r}")
+            return href
+        if isinstance(href, (bytes, PathLike)):
+            href = fsdecode(href)
+        else:
+            href = str(href)
+        assert (href := href.strip("/")), "empty href"
         try:
             id = self._href_to_id[href]
-        except LookupError:
-            raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
-        return self[id]
+        except LookupError as e:
+            raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}") from e
+        return super().__getitem__(id)
 
     def __contains__(self, other, /):
         if isinstance(other, Item):
-            return other._manifest is self and other.id in self
+            return other._manifest is self and super().__contains__(other["id"])
         return super().__contains__(other)
 
     def __delitem__(self, key, /):
         pop = self.pop
-        if isinstance(key, Item):
-            key = key.id
-        if isinstance(key, str):
-            pop(key, None)
-        elif isinstance(key, int):
+        if isinstance(key, int):
             el = self._root[key]
-            pop(el.attrib["id"], None)
+            try:
+                id = el.attrib["id"]
+            except AttributeError:
+                try:
+                    self._root.remove(el)
+                except:
+                    pass
+            else:
+                pop(id)
         elif isinstance(key, slice):
-            for el in self._root[key]:
-                pop(el.attrib["id"], None)
+            root = self._root
+            for el in root[key]:
+                try:
+                    id = el.attrib["id"]
+                except AttributeError:
+                    try:
+                        root.remove(el)
+                    except:
+                        pass
+                else:
+                    pop(id, None)
+        elif isinstance(key, Item):
+            if key not in self:
+                raise LookupError(f"no such item: {key!r}")
+            pop(key["id"])
+        elif isinstance(key, str):
+            pop(key)
         else:
-            super().__delitem__(self, key)
+            raise TypeError("`key` only accepts: `str`, `int`, `slice`, `Item`")
         return self
 
     def __getitem__(self, key, /):
-        if isinstance(key, Item):
-            key = key.id
+        def wrap(el):
+            try:
+                if el.tag == "item" or el.tag.endswith("}item"):
+                    return Item(el, self)
+                return ElementProxy(el)
+            except AttributeError:
+                return el
         if isinstance(key, int):
-            return Item(self._root[key], self)
+            return wrap(self._root[key])
         elif isinstance(key, slice):
-            return [Item(el, self) for el in self._root[key]]
-        else:
+            return list(map(wrap, self._root[key]))
+        elif isinstance(key, Item):
+            if key not in self:
+                raise LookupError(f"no such item: {key!r}")
+            return key
+        elif isinstance(key, str):
             return super().__getitem__(key)
+        else:
+            raise TypeError("`key` only accepts: `str`, `int`, `slice`, `Item`")
 
     def __setitem__(self, id, value, /):
-        if isinstance(id, Item):
-            id = id.id
         if id not in self:
-            raise LookupError(f"no such item id: {id!r}")
-        if isinstance(value, str):
-            self.rename(self[id].href, href)
-        elif isinstance(value, bytes):
-            self.write(self[id].href, value)
-        elif isinstance(value, PathLike):
-            self._href_to_file[self[id].href] = File(value, open_modes="rb")
-        elif isinstance(value, Mapping):
-            self[id].update(value)
+            raise LookupError(f"no such item: {id!r}")
+        if isinstance(id, Item):
+            item = id
         else:
-            raise TypeError("only `bytes`, `str`, `os.PathLike` and `typing.Mapping` are accecptable")
+            item = super().__getitem__(id)
+        href = unquote(item._attrib["href"])
+        if isinstance(value, str):
+            self.rename(href, value)
+        elif isinstance(value, bytes):
+            self.write(href, value)
+        elif isinstance(value, Mapping):
+            if "open" in value and callable(value["open"]):
+                self._href_to_file[href] = File(value, open_modes="rb")
+            else:
+                item.update(value)
+        else:
+            self._href_to_file[href] = File(value, open_modes="rb")
         return self
 
     @cached_property
-    def _workdir(self, /):
+    def _workfs(self, /):
         if self._epub._maketemp:
             return TemporaryFS(self._epub._workroot)
         else:
@@ -528,21 +579,21 @@ class Manifest(dict[str, Item]):
         return self
 
     def pop(self, id, /, default=undefined):
-        if isinstance(id, Item):
-            id = id.id
         if id not in self:
             if default is undefined:
-                raise LookupError(f"no such item id: {id!r}")
+                raise LookupError(f"no such item: {id!r}")
             return default
+        if isinstance(id, Item):
+            id = id["id"]
         item = super().pop(id)
         try:
             self._root.remove(item._root)
         except:
             pass
-        href = item.href
+        href = unquote(item._attrib["href"])
         self._href_to_id.pop(href, None)
         file = self._href_to_file.pop(href, None)
-        if file and file.check_open_mode("w"):
+        if file is not None and file.check_open_mode("w"):
             try:
                 file.remove()
             except:
@@ -555,7 +606,7 @@ class Manifest(dict[str, Item]):
             self._root.remove(item._root)
         except:
             pass
-        href = item.href
+        href = unquote(item._attrib["href"])
         self._href_to_id.pop(href, None)
         file = self._href_to_file.pop(href, None)
         if file is not None and file.check_open_mode("w"):
@@ -567,83 +618,104 @@ class Manifest(dict[str, Item]):
 
     def set(self, id, value, /):
         if isinstance(id, Item):
-            id = id.id
-        if isinstance(value, str):
-            href = value
-            if id in self:
-                item = self[id]
-                self.rename(item.href, href)
-                return item
-            else:
-                return self.add(href, id=id)
-        elif isinstance(value, bytes):
             if id not in self:
-                raise LookupError(f"no such item id: {id!r}")
-            item = self[id]
-            self.write(item.href, value)
-            return item
-        elif isinstance(value, PathLike):
-            if id not in self:
-                raise LookupError(f"no such item id: {id!r}")
-            item = self[id]
-            self._href_to_file[item.href] = File(value, open_modes="rb")
-            return item
-        elif isinstance(value, Mapping):
-            if id in self:
-                return self[id].update(value)
-            else:
-                return self.add(attrib["href"], id=id, attrib=attrib)
+                raise LookupError(f"no such item: {id!r}")
+            item = id
         else:
-            raise TypeError("only `bytes`, `str`, `os.PathLike` and `typing.Mapping` are accecptable")
+            item = super().get(id)
+        if item is None:
+            if isinstance(value, str):
+                item = self.add(href, id=id)
+            elif isinstance(value, Mapping) and "href" in value:
+                if "open" in value and callable(value["open"]):
+                    item = self.add(value["href"], value, id=id)
+                else:
+                    item = self.add(value["href"], id=id, attrib=value)
+            else:
+                raise LookupError(f"no such item: {id!r}")
+        else:
+            href = unquote(item._attrib["href"])
+            if isinstance(value, str):
+                self.rename(href, value)
+            elif isinstance(value, bytes):
+                self.write(href, value)
+            elif isinstance(value, Mapping):
+                if "open" in value and callable(value["open"]):
+                    self._href_to_file[href] = File(value, open_modes="rb")
+                else:
+                    item.update(value)
+            else:
+                self._href_to_file[href] = File(value, open_modes="rb")
+        return item
 
     def setdefault(self, id, value, /):
         if isinstance(id, Item):
-            id = id.id
-        if isinstance(value, str):
-            try:
-                return self[id]
-            except LookupError:
-                return self.add(value, id=id)
-        elif isinstance(value, Mapping):
-            try:
-                return self[id].merge(value)
-            except LookupError:
-                return self.add(attrib["href"], id=id, attrib=attrib)
+            if id not in self:
+                raise LookupError(f"no such item: {id!r}")
+            item = id
         else:
-            raise TypeError("only `str` and `typing.Mapping` are accecptable")
+            item = super().get(id)
+        if item is None:
+            if isinstance(value, str):
+                item = self.add(value, id=id)
+            elif isinstance(value, Mapping) and "href" in value:
+                if "open" in value and callable(value["open"]):
+                    item = self.add(value["href"], value, id=id)
+                else:
+                    item = self.add(value["href"], id=id, attrib=value)
+            else:
+                raise LookupError(f"no such item: {id!r}")
+        else:
+            if isinstance(value, Mapping) and not ("open" in value and callable(value["open"])):
+                item.merge(value)
+        return item
 
     def merge(self, id_or_attrib=None, /, **attrs):
-        if isinstance(id_or_attrib, Item):
-            id_or_attrib = id_or_attrib.id
-        if isinstance(id_or_attrib, str):
-            id = id_or_attrib
-            if id in self:
-                if attrs:
-                    self[id].merge(attrs)
-            elif "href" in attrs:
-                href = attrs.pop("href")
-                self.add(href, attrib=attrs)
+        if attrs:
+            if isinstance(id_or_attrib, Item):
+                item = id_or_attrib
+                if item not in self:
+                    raise LookupError(f"no such item: {item!r}")
+                item.merge(attrib=attrs)
+            elif isinstance(id_or_attrib, str):
+                id = id_or_attrib
+                item = super().get(id)
+                if item is None:
+                    if "href" in attrs:
+                        href = attrs.pop("href")
+                        self.add(href, id=id, attrib=attrs)
+                    else:
+                        raise LookupError(f"no such item: {id!r}")
+                else:
+                    item.merge(attrs)
             else:
-                raise LookupError(f"no such item id: {id!r}")
-        else:
-            self._proxy.merge(id_or_attrib, **attrs)
+                self._proxy.merge(id_or_attrib, **attrs)
+        elif isinstance(id_or_attrib, Mapping):
+            self._proxy.merge(id_or_attrib)
         return self
 
     def update(self, id_or_attrib=None, /, **attrs):
-        if isinstance(id_or_attrib, Item):
-            id_or_attrib = id_or_attrib.id
-        if isinstance(id_or_attrib, str):
-            id = id_or_attrib
-            if id in self:
-                if attrs:
-                    self[id].update(attrs)
-            elif "href" in attrs:
-                href = attrs.pop("href")
-                self.add(href, attrib=attrs)
+        if attrs:
+            if isinstance(id_or_attrib, Item):
+                item = id_or_attrib
+                if item not in self:
+                    raise LookupError(f"no such item: {item!r}")
+                item.update(attrib=attrs)
+            elif isinstance(id_or_attrib, str):
+                id = id_or_attrib
+                item = super().get(id)
+                if item is None:
+                    if "href" in attrs:
+                        href = attrs.pop("href")
+                        self.add(href, id=id, attrib=attrs)
+                    else:
+                        raise LookupError(f"no such item: {id!r}")
+                else:
+                    item.update(attrs)
             else:
-                raise LookupError(f"no such item id: {id!r}")
-        else:
-            self._proxy.update(id_or_attrib, **attrs)
+                self._proxy.update(id_or_attrib, **attrs)
+        elif isinstance(id_or_attrib, Mapping):
+            self._proxy.update(id_or_attrib)
         return self
 
     #################### SubElement Methods #################### 
@@ -699,9 +771,11 @@ class Manifest(dict[str, Item]):
                 if not preds:
                     return None
                 if type(predicate) is tuple:
-                    return lambda s, _preds=preds: all(p(s) for p in preds)
-                else:
                     return lambda s, _preds=preds: any(p(s) for p in preds)
+                else:
+                    return lambda s, _preds=preds: all(p(s) for p in preds)
+            elif isinstance(predicate, Container):
+                return predicate.__contains__
         predicate = activate_predicate(predicate)
         if predicate is None:
             return filter(lambda item: attr in item, self.values())
@@ -709,33 +783,35 @@ class Manifest(dict[str, Item]):
 
     @PyLinq.streamify
     def iter(self, /):
-        for el in self._root.iterfind("*"):
-            if el.tag != "item" and not el.tag.endswith("}item"):
+        root = self._root
+        for el in root.iterfind("*"):
+            if not (el.tag == "item" or el.tag.endswith("}item")):
                 yield ElementProxy(el)
                 continue
             id = el.attrib.get("id")
             href = el.attrib.get("href")
             if not href:
-                if id is None or id not in self:
+                if id is None or not super().__contains__(id):
                     try:
-                        self._root.remove(el)
+                        root.remove(el)
                         warn(f"removed a dangling item element: {el!r}")
                     except:
                         pass
                 else:
-                    item = self[id]
+                    item = super().__getitem__(id)
                     if item._root is not el:
                         raise RuntimeError(f"different item elements {el!r} and {item._root!r} share the same id {id!r}")
                     else:
                         self.pop(id, None)
                         warn(f"removed an item because of missing href attribute: {item!r}")
                 continue
+            href = unquote(href)
             if not el.attrib.get("media-type"):
                 el.attrib["media-type"] = guess_media_type(href)
             if id is None:
                 yield self.add(href)
-            elif id in self:
-                item = self[id]
+            elif super().__contains__(id):
+                item = super().__getitem__(id)
                 if item._root is not el:
                     raise RuntimeError(f"different item elements {el!r} and {item._root!r} share the same id {id!r}")
                 yield item
@@ -763,9 +839,12 @@ class Manifest(dict[str, Item]):
         attrib=None, 
     ):
         if isinstance(href, Item):
-            href = href._attrib["href"]
+            raise TypeError("can't directly add `Item` object")
+        if isinstance(href, (bytes, PathLike)):
+            href = fsdecode(href)
         else:
-            assert (href := href.strip("/"))
+            href = str(href)
+        assert (href := href.strip("/")), "empty href"
         if href in self._href_to_id:
             raise FileExistsError(errno.EEXIST, f"file exists: {href!r}")
         uid = str(uuid4())
@@ -779,22 +858,22 @@ class Manifest(dict[str, Item]):
             raise LookupError(f"id already exists: {id!r}")
         attrib = dict(attrib) if attrib else {}
         attrib["id"] = id
-        attrib["href"] = href
+        attrib["href"] = quote(href, safe=":/?&=#")
         if media_type:
             attrib["media-type"] = media_type
         if fs is not None:
             file = File(file, fs=fs, open_modes=open_modes)
         elif file is None:
-            file = File(uid, self._workdir)
+            file = File(uid, self._workfs)
         elif isinstance(file, IOBase) or hasattr(file, "read") and not hasattr(file, "open"):
             file0 = file
-            file = File(uid, self._workdir)
+            file = File(uid, self._workfs)
             test_data = file0.read(0)
             if test_data == b"":
-                copyfileobj(file0, self._workdir.open(uid, "wb"))
+                copyfileobj(file0, self._workfs.open(uid, "wb"))
             elif test_data == "":
                 attrib.setdefault("media-type", "text/plain")
-                copyfileobj(file0, self._workdir.open(uid, "w"))
+                copyfileobj(file0, self._workfs.open(uid, "w"))
             else:
                 raise TypeError(f"incorrect read behavior: {file0!r}")
         else:
@@ -808,6 +887,13 @@ class Manifest(dict[str, Item]):
         return item
 
     def exists(self, href, /):
+        if isinstance(href, Item):
+            return href in self
+        if isinstance(href, (bytes, PathLike)):
+            href = fsdecode(href)
+        else:
+            href = str(href)
+        assert (href := href.strip("/")), "empty href"
         return href in self._href_to_id
 
     @PyLinq.streamify
@@ -816,7 +902,7 @@ class Manifest(dict[str, Item]):
         if not pattern:
             return
         if isinstance(dirname, Item):
-            dirname = posixpath.dirname(href._attrib["href"])
+            dirname = posixpath.dirname(unquote(href._attrib["href"]))
         else:
             dirname = dirname.strip("/")
         if dirname:
@@ -829,21 +915,21 @@ class Manifest(dict[str, Item]):
             if not matches(href):
                 continue
             try:
-                yield self[id]
+                yield super().__getitem__(id)
             except KeyError:
                 pass
 
     @PyLinq.streamify
     def iterdir(self, /, dirname=""):
         if isinstance(dirname, Item):
-            dirname = posixpath.dirname(href._attrib["href"])
+            dirname = posixpath.dirname(unquote(href._attrib["href"]))
         else:
             dirname = dirname.strip("/")
         for href, id in self._href_to_id.items():
             if posixpath.dirname(href) != dirname:
                 continue
             try:
-                yield self[id]
+                yield super().__getitem__(id)
             except KeyError:
                 pass
 
@@ -857,12 +943,18 @@ class Manifest(dict[str, Item]):
         errors=None, 
         newline=None, 
     ):
-        if isinstance(href, Item):
-            href = href._attrib["href"]
-        else:
-            assert (href := href.strip("/"))
         if mode not in OPEN_MODES:
             raise ValueError(f"invalid open mode: {mode!r}")
+        if isinstance(href, Item):
+            if href not in self:
+                raise LookupError(f"no such item: {href!r}")
+            href = unquote(href["href"])
+        else:
+            if isinstance(href, (bytes, PathLike)):
+                href = fsdecode(href)
+            else:
+                href = str(href)
+            assert (href := href.strip("/")), "empty href"
         href_to_file = self._href_to_file
         if href in self._href_to_id:
             if "x" in mode:
@@ -870,7 +962,7 @@ class Manifest(dict[str, Item]):
             file = href_to_file.get(href)
             uid = str(uuid4())
             if file is None:
-                href_to_file[href] = file = File(uid, self._workdir)
+                href_to_file[href] = file = File(uid, self._workfs)
             elif not file.check_open_mode(mode):
                 if "w" not in mode:
                     try:
@@ -880,8 +972,8 @@ class Manifest(dict[str, Item]):
                             raise
                     else:
                         with fsrc:
-                            copyfileobj(fsrc, self._workdir.open(uid, "wb"))
-                href_to_file[href] = file = File(uid, self._workdir)
+                            copyfileobj(fsrc, self._workfs.open(uid, "wb"))
+                href_to_file[href] = file = File(uid, self._workfs)
         elif "r" in mode:
             raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
         else:
@@ -897,29 +989,27 @@ class Manifest(dict[str, Item]):
             newline=newline, 
         )
 
-    def read(self, href, /):
-        if isinstance(href, Item):
-            href = href._attrib["href"]
-        else:
-            assert (href := href.strip("/"))
-        with self.open(href, "rb", buffering=0) as f:
+    def read(self, href, /, buffering=0):
+        with self.open(href, "rb", buffering=buffering) as f:
             return f.read()
 
     read_bytes = read
 
     def read_text(self, href, /, encoding=None):
-        if isinstance(href, Item):
-            href = href._attrib["href"]
-        else:
-            assert (href := href.strip("/"))
         with self.open(href, "r", encoding=encoding) as f:
             return f.read()
 
     def remove(self, href, /):
         if isinstance(href, Item):
-            href = href._attrib["href"]
+            if href not in self:
+                raise LookupError(f"no such item: {href!r}")
+            href = unquote(href["href"])
         else:
-            assert (href := href.strip("/"))
+            if isinstance(href, (bytes, PathLike)):
+                href = fsdecode(href)
+            else:
+                href = str(href)
+            assert (href := href.strip("/")), "empty href"
         try:
             id = self._href_to_id.pop(href)
         except LookupError:
@@ -937,97 +1027,174 @@ class Manifest(dict[str, Item]):
             except:
                 pass
 
-    def rename(self, href, href_new, /):
-        if isinstance(href, Item):
-            href = href._attrib["href"]
-        else:
-            assert (href := href.strip("/"))
-        assert (href_new := href_new.strip("/"))
-        if href == href_new:
-            return
-        if href_new in self._href_to_id:
-            raise FileExistsError(errno.EEXIST, f"target file exists: {href_new!r}")
+    def _rename(self, item, href, dest_href, /):
         try:
-            id = self._href_to_id[href_new] = self._href_to_id.pop(href)
+            id = self._href_to_id[dest_href] = self._href_to_id.pop(href)
         except LookupError:
             raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
-        self[id]["href"] = href_new
-        self._href_to_file[href_new] = self._href_to_file.pop(href, None)
+        if item is None:
+            item = super().__getitem__(id)
+        item._attrib["href"] = quote(dest_href, safe=":/?&=#")
+        self._href_to_file[dest_href] = self._href_to_file.pop(href, None)
+
+    def rename(self, href, dest_href, /, repair=False):
+        result = {}
+        if isinstance(href, Item):
+            item = href
+            if item not in self:
+                raise LookupError(f"no such item: {item!r}")
+            href = unquote(item._attrib["href"])
+        else:
+            if isinstance(href, (bytes, PathLike)):
+                href = fsdecode(href)
+            else:
+                href = str(href)
+            assert (href := href.strip("/")), "empty href"
+            item = None
+        if isinstance(dest_href, (bytes, PathLike)):
+            dest_href = fsdecode(dest_href)
+        else:
+            dest_href = str(dest_href)
+        assert (dest_href := dest_href.strip("/")), "empty href"
+        result["pathpair"] = (href, dest_href)
+        if href != dest_href:
+            if dest_href in self._href_to_id:
+                raise FileExistsError(errno.EEXIST, f"target file exists: {dest_href!r}")
+            self._rename(item, href, dest_href)
+            if repair:
+                result["repairs"] = remap_links(self, (href, dest_href))
+        return result
+
+    def batch_rename(self, mapper, /, predicate=None, repair=False):
+        result = {}
+        result["pathmap"] = pathmap = {}
+        result["fails"] = fails = {}
+        if not callable(mapper) and isinstance(mapper, Mapping):
+            def mapper(item, m=mapper):
+                href = unquote(item["href"])
+                try:
+                    return m[href]
+                except LookupError:
+                    return href
+            if predicate is None:
+                predicate = mapper
+        if not callable(predicate) and isinstance(predicate, Mapping):
+            predicate = lambda item, m=predicate: unquote(item["href"]) in m
+        for item in self.filter(predicate):
+            try:
+                href, dest_href = self.rename(item, mapper(item))["pathpair"]
+                if href != dest_href:
+                    pathmap[href] = dest_href
+            except Exception as e:
+                fails[unquote(item._attrib["href"])] = e
+        if pathmap and repair:
+            result["repairs"] = remap_links(self, pathmap)
+        return result
 
     def replace(self, href, dest_href, /):
         if isinstance(href, Item):
-            href = href._attrib["href"]
+            item = href
+            if item not in self:
+                raise LookupError(f"no such item: {item!r}")
+            href = unquote(item._attrib["href"])
         else:
-            assert (href := href.strip("/"))
-        assert (dest_href := dest_href.strip("/"))
-        if href not in self._href_to_id:
-            raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
-        if dest_href in self._href_to_id:
-            self.remove(dest_href)
-        self.rename(href, dest_href)
+            if isinstance(href, (bytes, PathLike)):
+                href = fsdecode(href)
+            else:
+                href = str(href)
+            assert (href := href.strip("/")), "empty href"
+            if href not in self._href_to_id:
+                raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
+            item = None
+        if isinstance(dest_href, Item):
+            dest_item = dest_href
+            if dest_item not in self:
+                raise LookupError(f"no such item: {dest_item!r}")
+            dest_href = unquote(dest_item["href"])
+        else:
+            if isinstance(dest_href, (bytes, PathLike)):
+                dest_href = fsdecode(dest_href)
+            else:
+                dest_href = str(dest_href)
+            assert (dest_href := dest_href.strip("/")), "empty href"
+            dest_item = None
+        if href == dest_href:
+            return
+        if dest_item is not None:
+            del self[dest_item]
+        elif dest_href in self._href_to_id:
+            del self[self._href_to_id[dest_href]]
+        self._rename(item, href, dest_href)
 
-    @PyLinq.streamify
     def rglob(self, pattern="", dirname="", ignore_case=False):
-        pattern = joinpath("**", pattern.lstrip("/"))
-        return self.glob(pattern, dirname)
+        if pattern:
+            pattern = joinpath("**", pattern.lstrip("/"))
+        else:
+            pattern = "**"
+        return self.glob(pattern, dirname, ignore_case)
 
     def stat(self, href, /) -> Optional[stat_result]:
         if isinstance(href, Item):
-            href = href._attrib["href"]
+            if href not in self:
+                raise LookupError(f"no such item: {href!r}")
+            href = unquote(href["href"])
         else:
-            assert (href := href.strip("/"))
-        if href not in self._href_to_id:
-            raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
+            if isinstance(href, (bytes, PathLike)):
+                href = fsdecode(href)
+            else:
+                href = str(href)
+            assert (href := href.strip("/")), "empty href"
+            if href not in self._href_to_id:
+                raise FileNotFoundError(errno.ENOENT, f"no such file: {href!r}")
         try:
             stat = self._href_to_file[href].stat
-        except LookupError:
+        except (AttributeError, LookupError):
             return None
-        if stat is None:
-            return None
-        return stat()
+        if callable(stat):
+            return stat()
+        return None
 
     def touch(self, href, /):
-        if isinstance(href, Item):
-            href = href._attrib["href"]
-        else:
-            assert (href := href.strip("/"))
-        self.open(href, "ab", buffering=0).close()
+        try:
+            self.open(href, "rb", buffering=0).close()
+        except:
+            self.open(href, "wb", buffering=0).close()
 
     unlink = remove
 
     def write(self, href, /, data):
-        if isinstance(href, Item):
-            href = href._attrib["href"]
-        else:
-            assert (href := href.strip("/"))
+        need_close = True
         if isinstance(data, File):
-            with data.open("rb", buffering=0) as fsrc, self.open("wb", buffering=0) as fdst:
-                copyfileobj(fsrc, fdst)
+            fsrc = data.open("rb", buffering=0)
         elif callable(getattr(data, "read", None)):
-            test_data = data.read(0)
-            if test_data == b"":
-                with self.open("wb", buffering=0) as fdst:
-                    copyfileobj(data, fdst)
-            elif test_data == "":
-                with self.open("w") as fdst:
-                    copyfileobj(data, fdst)
-            else:
-                raise TypeError(f"incorrect read behavior: {data!r}")
+            fsrc = data
+            need_close = False
         elif isinstance(data, (str, PathLike)):
-            with open(data, "rb", buffering=0) as fsrc, self.open("wb", buffering=0) as fdst:
-                copyfileobj(fsrc, fdst)
+            fsrc = open(data, "rb", buffering=0)
         else:
             content = memoryview(data)
             with self.open(href, "wb") as f:
                 return f.write(content)
+        try:
+            fsrc_read = fsrc.read
+            test_data = fsrc_read(0)
+            if test_data == "":
+                fsrc_read = lambda n, read=fsrc_read: bytes(read(n), "utf-8")
+            elif test_data:
+                raise TypeError(f"incorrect read behavior: {fsrc!r}")
+            with self.open(href, "wb") as fdst:
+                fdst_write = fdst.write
+                n = 0
+                while (buf := fsrc_read(1 << 16)):
+                    n += fdst_write(buf)
+                return n
+        finally:
+            if need_close:
+                fsrc.close()
 
     write_bytes = write
 
     def write_text(self, href, /, text, encoding=None, errors=None, newline=None):
-        if isinstance(href, Item):
-            href = href._attrib["href"]
-        else:
-            assert (href := href.strip("/"))
         with self.open(href, "w", encoding=encoding, errors=errors, newline=newline) as f:
             return f.write(text)
 
@@ -1060,57 +1227,102 @@ class Spine(dict[str, Itemref]):
         raise TypeError("subclassing is not allowed")
 
     def __call__(self, id, /, attrib=None):
-        itemref = self.get(id)
-        if attrib is None:
-            if id in self._manifest:
-                return itemref
-            elif itemref is not None:
-                del self[id]
-        elif id in self._manifest:
-            if itemref is not None:
-                itemref.update(attrib)
-            else:
-                itemref = self._add(id, attrib)
+        if isinstance(id, Item):
+            id = id._attrib["id"]
+        if isinstance(id, Itemref):
+            if id not in self:
+                raise LookupError(f"no such itemref: {id!r}")
+            itemref = id
+        else:
+            itemref = super().get(id)
+        if not attrib:
             return itemref
-        elif itemref is not None:
-            del self[id]
+        if itemref is None:
+            if id not in self._manifest:
+                raise LookupError(f"no such item: {id!r}")
+            itemref = self._add(id, attrib)
+        else:
+            itemref.update(attrib)
+        return itemref
+
+    def __contains__(self, id, /):
+        if isinstance(id, Itemref):
+            return super().get(id._attrib["idref"]) is id
+        return super().__contains__(id)
 
     def __delitem__(self, key, /):
         pop = self.pop
-        if isinstance(key, Item):
-            key = key.id
-        elif isinstance(key, Itemref):
-            key = key.idref
+        if isinstance(key, Itemref):
+            if key not in self:
+                raise LookupError(f"no such itemref: {key!r}")
+            key = key._attrib["idref"]
+        elif isinstance(key, Item):
+            key = key._attrib["id"]
         if isinstance(key, str):
             pop(key, None)
-        if isinstance(key, int):
+        elif isinstance(key, int):
             el = self._root[key]
-            pop(el.attrib["id"], None)
+            try:
+                id = el.attrib["idref"]
+            except AttributeError:
+                try:
+                    self._root.remove(el)
+                except:
+                    pass
+            else:
+                pop(id)
         elif isinstance(key, slice):
-            for el in self._root[key]:
-                pop(el.attrib["id"], None)
+            root = self._root
+            for el in root[key]:
+                try:
+                    id = el.attrib["idref"]
+                except AttributeError:
+                    try:
+                        root.remove(el)
+                    except:
+                        pass
+                else:
+                    pop(id, None)
         else:
-            super().__delitem__(self, key)
+            raise TypeError("`key` only accepts: `str`, `int`, `slice`, `Item`, `Itemref`")
         return self
 
     def __getitem__(self, key, /):
+        def wrap(el):
+            try:
+                if el.tag == "itemref" or el.tag.endswith("}itemref"):
+                    return Itemref(el)
+                return ElementProxy(el)
+            except AttributeError:
+                return el
+        if isinstance(key, Itemref):
+            if key not in self:
+                raise LookupError(f"no such itemref: {key!r}")
+            return key
         if isinstance(key, Item):
-            key = key.id
-        elif isinstance(key, Itemref):
-            key = key.idref
-        if isinstance(key, int):
-            return Itemref(self._root[key])
-        elif isinstance(key, slice):
-            return list(map(Itemref, self._root[key]))
-        else:
+            key = key._attrib["id"]
+        if isinstance(key, str):
             return super().__getitem__(key)
+        elif isinstance(key, int):
+            return wrap(self._root[key])
+        elif isinstance(key, slice):
+            return list(map(wrap, self._root[key]))
+        else:
+            raise TypeError("`key` only accepts: `str`, `int`, `slice`, `Item`, `Itemref`")
 
     def __setitem__(self, id, attrib, /):
-        if isinstance(id, Item):
-            id = id.id
-        elif isinstance(id, Itemref):
-            id = id.idref
-        self[id].update(attrib)
+        if isinstance(key, Item):
+            key = key._attrib["id"]
+        if isinstance(key, Itemref):
+            if key not in self:
+                raise LookupError(f"no such itemref: {key!r}")
+            itemref = key
+        else:
+            itemref = super().get(id)
+        if itemref is None:
+            self.add(key, attrib=attrib)
+        else:
+            itemref.update(attrib)
         return self
 
     @property
@@ -1141,11 +1353,13 @@ class Spine(dict[str, Itemref]):
         return itemref
 
     def add(self, id, /, attrib=None):
+        if isinstance(id, Itemref):
+            raise TypeError("can't directly add `Itemref` object")
         if isinstance(id, Item):
-            id = id.id
-        if id not in self._manifest:
+            id = id._attrib["id"]
+        elif id not in self._manifest:
             raise LookupError(f"no such id in manifest: {id!r}")
-        elif id in self:
+        if super().__contains__(id):
             raise LookupError(f"id already exists: {id!r}")
         return self._add(id, attrib)
 
@@ -1156,35 +1370,46 @@ class Spine(dict[str, Itemref]):
 
     @PyLinq.streamify
     def iter(self, /):
-        for el in self._root.iterfind("*"):
-            if el.tag == "itemref" or el.tag.endswith("}itemref"):
-                idref = el.attrib.get("idref")
-                if idref is None or idref not in self._manifest:
-                    try:
-                        self._root.remove(el)
-                        warn(f"removed a dangling itemref element: {el!r}")
-                    except:
-                        pass
-                elif idref not in self:
-                    itemref = self[idref] = Itemref(el)
-                    yield itemref
-                else:
-                    itemref = self[idref]
-                    if itemref._root is not el:
-                        raise RuntimeError(f"different itemref elements {el!r} and {itemref._root!r} share the same id {idref!r}")
-                    yield itemref
-            else:
+        root = self._root
+        for el in root.iterfind("*"):
+            if not (el.tag == "itemref" or el.tag.endswith("}itemref")):
                 yield ElementProxy(el)
+                continue
+            idref = el.attrib.get("idref")
+            if idref is None or idref not in self._manifest:
+                try:
+                    root.remove(el)
+                    warn(f"removed a dangling itemref element: {el!r}")
+                except:
+                    pass
+            elif idref not in self:
+                itemref = self._add(idref)
+                yield itemref
+            else:
+                itemref = self[idref]
+                if itemref._root is not el:
+                    raise RuntimeError(f"different itemref elements {el!r} and {itemref._root!r} share the same id {idref!r}")
+                yield itemref
 
     def list(self, /):
         return list(self.iter())
 
     def pop(self, id, /, default=undefined):
-        if id not in self:
-            if default is undefined:
-                raise LookupError(f"no such id in manifest: {id!r}")
-            return default
-        itemref = super().pop(id)
+        if isinstance(id, Item):
+            id = id._attrib["id"]
+        if isinstance(id, Itemref):
+            if id not in self:
+                if default is undefined:
+                    raise LookupError(f"no such itemref: {id!r}")
+                return default
+            itemref = id
+            super().__delitem__(itemref._attrib["idref"])
+        else:
+            if id not in self:
+                if default is undefined:
+                    raise LookupError(f"no such itemref: {id!r}")
+                return default
+            itemref = super().pop(id)
         try:
             self._root.remove(itemref._root)
         except:
@@ -1200,47 +1425,75 @@ class Spine(dict[str, Itemref]):
         return id, itemref
 
     def set(self, id, /, attrib=None):
-        if id in self:
-            return self[id].update(attrib)
+        if isinstance(id, Item):
+            id = id._attrib["id"]
+        if isinstance(id, Itemref):
+            if id not in self:
+                raise LookupError(f"no such itemref: {id!r}")
+            itemref = id
         else:
+            itemref = super().get(id)
+        if itemref is None:
             return self.add(id, attrib)
+        itemref.update(attrib)
+        return itemref
 
     def setdefault(self, id, /, attrib=None):
-        if id in self:
-            return self[id].merge(attrib)
+        if isinstance(id, Item):
+            id = id._attrib["id"]
+        if isinstance(id, Itemref):
+            if id not in self:
+                raise LookupError(f"no such itemref: {id!r}")
+            itemref = id
         else:
+            itemref = super().get(id)
+        if itemref is None:
             return self.add(id, attrib)
+        itemref.merge(attrib)
+        return itemref
 
     def merge(self, id_or_attrib=None, /, **attrs):
         if isinstance(id_or_attrib, Item):
-            id_or_attrib = id_or_attrib.id
-        elif isinstance(id_or_attrib, Itemref):
-            id_or_attrib = id_or_attrib.idref
-        if isinstance(id_or_attrib, str):
-            id = id_or_attrib
-            if id in self:
-                if attrs:
-                    self[id].merge(attrs)
+            id_or_attrib = id_or_attrib._attrib["id"]
+        if attrs:
+            if isinstance(id_or_attrib, Itemref):
+                itemref = id_or_attrib
+                if itemref not in self:
+                    raise LookupError(f"no such itemref: {itemref!r}")
+                itemref.merge(attrs)
+            elif isinstance(id_or_attrib, str):
+                id = id_or_attrib
+                itemref = super().get(id)
+                if itemref is None:
+                    self.add(id, attrs)
+                else:
+                    itemref.merge(attrs)
             else:
-                self.add(id, attrs)
-        else:
-            self._proxy.merge(id_or_attrib, **attrs)
+                self._proxy.merge(id_or_attrib, **attrs)
+        elif isinstance(id_or_attrib, Mapping):
+            self._proxy.merge(id_or_attrib)
         return self
 
     def update(self, id_or_attrib=None, /, **attrs):
         if isinstance(id_or_attrib, Item):
-            id_or_attrib = id_or_attrib.id
-        elif isinstance(id_or_attrib, Itemref):
-            id_or_attrib = id_or_attrib.idref
-        if isinstance(id_or_attrib, str):
-            id = id_or_attrib
-            if id in self:
-                if attrs:
-                    self[id].update(attrs)
+            id_or_attrib = id_or_attrib._attrib["id"]
+        if attrs:
+            if isinstance(id_or_attrib, Itemref):
+                itemref = id_or_attrib
+                if itemref not in self:
+                    raise LookupError(f"no such itemref: {itemref!r}")
+                itemref.update(attrs)
+            elif isinstance(id_or_attrib, str):
+                id = id_or_attrib
+                itemref = super().get(id)
+                if itemref is None:
+                    self.add(id, attrs)
+                else:
+                    itemref.update(attrs)
             else:
-                self.add(id, attrs)
-        else:
-            self._proxy.update(id_or_attrib, **attrs)
+                self._proxy.update(id_or_attrib, **attrs)
+        elif isinstance(id_or_attrib, Mapping):
+            self._proxy.update(id_or_attrib)
         return self
 
 
@@ -1258,7 +1511,7 @@ class ePub(ElementProxy):
             )
             if match is None:
                 raise FileNotFoundError(errno.ENOENT, "no opf file specified in container.xml")
-            self._opf_path = opf_path = match.attrib["full-path"]
+            self._opf_path = opf_path = unquote(match.attrib["full-path"])
             self._opf_dir, self._opf_name = opf_dir, _ = posixpath.split(opf_path)
             root = fromstring(zfile.read(opf_path))
         else:
@@ -1331,7 +1584,7 @@ class ePub(ElementProxy):
             "spine": MappingProxyType({"attrib": self.spine.attrib, "children": self.spine.info}), 
         })
 
-    @proxy_property
+    @proxy_property # type: ignore
     def identifier(self, /):
         uid = self.get("unique-identifier")
         text = lambda: f"urn:uuid:{uuid4()}"
@@ -1340,7 +1593,7 @@ class ePub(ElementProxy):
         else:
             return self.metadata.dc("identifier", text=text, merge=True, auto_add=True)
 
-    @identifier.setter
+    @identifier.setter # type: ignore
     def identifier(self, text, /):
         uid = self.get("unique-identifier")
         if uid:
@@ -1348,19 +1601,19 @@ class ePub(ElementProxy):
         else:
             self.metadata.dc("identifier", text=text, auto_add=True)
 
-    @proxy_property
+    @proxy_property # type: ignore
     def language(self, /):
         return self.metadata.dc("language", text="en", merge=True, auto_add=True)
 
-    @language.setter
+    @language.setter # type: ignore
     def language(self, text, /):
         self.metadata.dc("language", text=text, auto_add=True)
 
-    @proxy_property
+    @proxy_property # type: ignore
     def title(self, /):
         return self.metadata.dc("title", text="", merge=True, auto_add=True)
 
-    @title.setter
+    @title.setter # type: ignore
     def title(self, text, /):
         self.metadata.dc("title", text=text, auto_add=True)
 
@@ -1423,6 +1676,23 @@ class ePub(ElementProxy):
             })
         return dcterm
 
+    def namelist(self, /):
+        opf_dir = self._opf_dir
+        zfile = self.__dict__.get("_zfile")
+        namelist = [joinpath(opf_dir, href) for href in self.manifest.href_to_id]
+        namelist.append(self._opf_path)
+        if zfile is None:
+            namelist.append("mimetype")
+            namelist.append("META-INF/container.xml")
+        else:
+            exclude_files = set(namelist)
+            exclude_files.update(
+                joinpath(opf_dir, unquote(item.attrib["href"]))
+                for item in fromstring(zfile.read(self._opf_path)).find("{*}manifest")
+            )
+            namelist.extend(name for name in zfile.NameToInfo if name not in exclude_files)
+        return namelist
+
     def pack(
         self, 
         /, 
@@ -1430,19 +1700,38 @@ class ePub(ElementProxy):
         compression=ZIP_STORED, 
         allowZip64=True, 
         compresslevel=None, 
+        extra_files=None, 
     ):
         if not path and not self._path:
             raise OSError(errno.EINVAL, "please specify a path to save")
         opf_dir, opf_name, opf_path = self._opf_dir, self._opf_name, self._opf_path
         href_to_id = self.manifest.href_to_id
         href_to_file = self.manifest.href_to_file
-        def write_oebps():
+        def write_extra_files(wfile, extra_files):
+            if extra_files:
+                if isinstance(extra_files, Mapping):
+                    extra_files = items(extra_files)
+                for name, file in extra_files:
+                    if name in exclude_files:
+                        continue
+                    exclude_files.add(name)
+                    if file is None or file == "":
+                        continue
+                    if hasattr(file, "read"):
+                        with wfile.open(name, "w") as fdst:
+                            copyfileobj(file, fdst)
+                    elif isinstance(file, (str, Pathlike)):
+                        wfile.write(file, name)
+                    else:
+                        content = memoryview(file)
+                        wfile.writestr(name, content)
+        def write_oebps(wfile):
             bad_ids = set()
             good_ids = set()
             for href, id in href_to_id.items():
                 if href == opf_name:
                     bad_ids.add(id)
-                    warn(f"ignore a file, because its href conflicts with OPF: {href!r}")
+                    warn(f"ignore a file, because its href conflicts with OPF: {opf_name!r}")
                     continue
                 file = href_to_file.get(href)
                 if file is None:
@@ -1466,36 +1755,40 @@ class ePub(ElementProxy):
             if bad_ids:
                 root = deepcopy(root)
                 manifest = root.find("{*}manifest")
-                manifest[:] = (item for item in manifest.iterfind("{*}item[@id]") if item.attrib["id"] in good_ids)
+                manifest[:] = (item for item in manifest.iterfind("{*}item[@id]") if item._attrib["id"] in good_ids)
             wfile.writestr(opf_path, tostring(root, encoding="utf-8", xml_declaration=True))
         zfile = self.__dict__.get("_zfile")
+        exclude_files = {joinpath(opf_dir, href) for href in href_to_id}
+        exclude_files.add(opf_path)
         if zfile is None:
             if path is None:
                 path = self._path
             with ZipFile(path, "w", compression, allowZip64, compresslevel) as wfile:
-                wfile.writestr("mimetype", b"application/epub+zip")
-                wfile.writestr("META-INF/container.xml", b'''\
+                write_extra_files(wfile, extra_files)
+                if "mimetype" not in exclude_files:
+                    wfile.writestr("mimetype", b"application/epub+zip")
+                if "META-INF/container.xml" not in exclude_files:
+                    wfile.writestr("META-INF/container.xml", b'''\
 <?xml version="1.0" encoding="utf-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
     <rootfiles>
         <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
    </rootfiles>
 </container>''')
-                write_oebps()
+                write_oebps(wfile)
         else:
             if path is None or path == self._path:
                 raise ValueError(f"not allowed to overwrite the original file: {self._path!r}")
-            exclude_files = {
-                joinpath(opf_dir, item.attrib["href"])
-                for item in fromstring(zfile.read(opf_path)).find("{*}manifest")
-            }
-            exclude_files.add(opf_path)
-            exclude_files.update(joinpath(opf_dir, href) for href in href_to_id)
             with ZipFile(path, "w", compression, allowZip64, compresslevel) as wfile:
+                write_extra_files(wfile, extra_files)
+                exclude_files.update(
+                    joinpath(opf_dir, unquote(item.attrib["href"]))
+                    for item in fromstring(zfile.read(opf_path)).find("{*}manifest")
+                )
                 for name, info in zfile.NameToInfo.items():
                     if info.is_dir() or name in exclude_files:
                         continue
                     with zfile.open(name) as fsrc, wfile.open(name, "w") as fdst:
                         copyfileobj(fsrc, fdst)
-                write_oebps()
+                write_oebps(wfile)
 

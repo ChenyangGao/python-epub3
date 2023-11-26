@@ -21,6 +21,8 @@ from typing import Mapping
 from uuid import uuid4
 from warnings import warn
 
+from .undefined import undefined
+
 
 OPEN_MODES = frozenset(
     "".join(t1) 
@@ -120,13 +122,21 @@ class File:
             _getattr = (fs if use_fs else path).__getitem__
         if _getattr is not None and use_fs:
             _getattr0 = _getattr
-            def _getattr(attr, /):
-                val = _getattr0(attr)
+            def _getattr(attr, default=undefined, /):
+                try:
+                    val = _getattr0(attr)
+                except (LookupError, AttributeError):
+                    if default is undefined:
+                        raise
+                    return default
                 if not callable(val):
                     return val
                 if isclass(val) or isinstance(val, staticmethod):
                     return val
                 return partial(val, path)
+        default_open_modes = _getattr("open_modes", None)
+        if default_open_modes is not None:
+            open_modes = default_open_modes
         super().__setattr__("_getattr", _getattr)
         open_keywords = cls._open_keywords(file_open)
         if "mode" not in open_keywords or open_modes == "":
