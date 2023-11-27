@@ -2,6 +2,18 @@
 
 ## An awsome epub3 library.
 
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/python-epub3)
+![PyPI - Version](https://img.shields.io/pypi/v/python-epub3)
+![PyPI - Downloads](https://img.shields.io/pypi/dm/python-epub3)
+![PyPI - Format](https://img.shields.io/pypi/format/python-epub3)
+![PyPI - Status](https://img.shields.io/pypi/status/python-epub3)
+
+![GitHub](https://img.shields.io/github/license/ChenyangGao/python-epub3)
+![GitHub all releases](https://img.shields.io/github/downloads/ChenyangGao/python-epub3/total)
+![GitHub language count](https://img.shields.io/github/languages/count/ChenyangGao/python-epub3)
+![GitHub issues](https://img.shields.io/github/issues/ChenyangGao/python-epub3)
+![Codecov](https://img.shields.io/codecov/c/github/ChenyangGao/python-epub3)
+
 [python-epub3](https://github.com/ChenyangGao/python-epub3) is a Python library for managing ePub 3 books.
 
 **WARNING** Currently under development, please do not use in production environment.

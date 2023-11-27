@@ -672,8 +672,10 @@ class ElementAttribProxy(metaclass=CachedMeta):
     def iter(self, /):
         return map(type(self).wrap, self._root.iterfind("*"))
 
-    def list(self, /):
-        return list(self.iter())
+    def list(self, /, mapfn=None):
+        if mapfn is None:
+            return list(self.iter())
+        return list(map(mapfn, self.iter()))
 
     def keys(self, /):
         return self._attrib.keys()

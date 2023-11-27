@@ -824,8 +824,10 @@ class Manifest(dict[str, Item]):
                 except:
                     pass
 
-    def list(self, /):
-        return list(self.iter())
+    def list(self, /, mapfn=None):
+        if mapfn is None:
+            return list(self.iter())
+        return list(map(mapfn, self.iter()))
 
     #################### File System Methods #################### 
 
@@ -1393,8 +1395,10 @@ class Spine(dict[str, Itemref]):
                     raise RuntimeError(f"different itemref elements {el!r} and {itemref._root!r} share the same id {idref!r}")
                 yield itemref
 
-    def list(self, /):
-        return list(self.iter())
+    def list(self, /, mapfn=None):
+        if mapfn is None:
+            return list(self.iter())
+        return list(map(mapfn, self.iter()))
 
     def pop(self, id, /, default=undefined):
         if isinstance(id, Item):
@@ -1522,13 +1526,15 @@ class ePub(ElementProxy):
             self._opf_name = "content.opf"
             root = fromstring(b'''\
 <?xml version="1.0" encoding="utf-8"?>
-<package version="3.0" unique-identifier="BookId" xmlns="http://www.idpf.org/2007/opf">
+<package version="3.3" unique-identifier="BookId" xmlns="http://www.idpf.org/2007/opf">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
-    <dc:identifier id="BookId">urn:uuid:%(uuid)s</dc:identifier>
+    <dc:identifier id="BookId" opf:scheme="UUID">urn:uuid:%(uuid)s</dc:identifier>
     <dc:language>en</dc:language>
     <dc:title></dc:title>
     <meta property="dcterms:modified">%(mtime)s</meta>
   </metadata>
+  <manifest />
+  <spine />
 </package>''' % {
     b"uuid": bytes(str(uuid4()), "utf-8"), 
     b"mtime": bytes(datetime.now().strftime("%FT%XZ"), "utf-8"), 
@@ -1620,7 +1626,7 @@ class ePub(ElementProxy):
         self.metadata.dc("title", text=text, auto_add=True)
 
     @proxy_property
-    def modified(self, /):
+    def modification_time(self, /):
         return self.metadata.meta(
             find_attrib={"property": "dcterms:modified"}, 
             text=lambda: datetime.now().strftime("%FT%XZ"), 
@@ -1629,6 +1635,7 @@ class ePub(ElementProxy):
         )
 
     def mark_modified(self, /):
+        self.metadata.dc('date[@opf:event="modification"]', text=lambda: datetime.now().strftime("%F"))
         return self.metadata.meta(
             find_attrib={"property": "dcterms:modified"}, 
             text=lambda: datetime.now().strftime("%FT%XZ"), 

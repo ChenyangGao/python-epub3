@@ -336,7 +336,7 @@ def resolve_prefix(
         if not uri and optional_nsmap:
             uri = get(optional_nsmap, prefix)
     if not uri:
-        name
+        return name
     return f"{{{uri}}}{name0}"
 
 
