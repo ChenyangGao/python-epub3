@@ -92,11 +92,11 @@ class Item(ElementAttribProxy):
 
     @property
     def filename(self, /):
-        return joinpath(self.home, self)
+        return PurePosixPath(joinpath(self.home, self))
 
     @property
     def home(self, /):
-        return self._manifest._epub._opf_dir
+        return PurePosixPath(self._manifest._epub._opf_dir)
 
     @property
     def name(self, /):
@@ -152,7 +152,7 @@ class Item(ElementAttribProxy):
         return self.path.is_relative_to(*other)
 
     def joinpath(self, /, *others):
-        return self.parent.joinpath(*others)
+        return PurePosixPath(normpath(joinpath(self._parent, *others)))
 
     __truediv__ = joinpath
 
@@ -751,6 +751,10 @@ class Manifest(dict[str, Item]):
                     predicate = methodcaller("startswith", predicate[1:])
                 elif predicate_startswith(r"$"):
                     predicate = methodcaller("endswith", predicate[1:])
+                elif predicate_startswith(r";"):
+                    predicate = lambda s, needle=predicate[1:]: needle in s.split()
+                elif predicate_startswith(r","):
+                    predicate = lambda s, needle=predicate[1:]: needle in s.split(",")
                 elif predicate_startswith(r"<"):
                     predicate = re_compile(r"\b"+re_escape(predicate[1:])).search
                 elif predicate_startswith(r">"):
@@ -828,6 +832,37 @@ class Manifest(dict[str, Item]):
         if mapfn is None:
             return list(self.iter())
         return list(map(mapfn, self.iter()))
+
+    def audio_iter(self, /):
+        return self.filter_by_attr("^audio/")
+
+    def css_iter(self, /):
+        return self.filter_by_attr("text/css")
+
+    def font_iter(self, /):
+        return self.filter_by_attr(("^font/", "^application/font-"))
+
+    def image_iter(self, /):
+        return self.filter_by_attr("^image/")
+
+    def javascript_iter(self, /):
+        return self.filter_by_attr(("text/javascript", "application/javascript", "application/ecmascript"))
+
+    def media_iter(self, /):
+        return self.filter_by_attr(("^audio/", "^image/", "^video/"))
+
+    def text_iter(self, /):
+        return self.filter_by_attr(("^text/", "$+xml"))
+
+    def video_iter(self, /):
+        return self.filter_by_attr("^video/")
+
+    @PyLinq.streamify
+    def html_spine_iter(self, /):
+        for id, itemref in book.spine.items():
+            yield book.manifest[id], itemref
+        for item in book.manifest.filter_by_attr(("text/html", "application/xhtml+xml")) :
+            yield item, None
 
     #################### File System Methods #################### 
 
@@ -1654,7 +1689,7 @@ class ePub(ElementProxy):
 
     @property
     def toc(self, /):
-        for item in self.manifest.filter_by_attr("nav", "properties"):
+        for item in self.manifest.filter_by_attr(";nav", "properties"):
             return item
         toc_id = self.spine.attrib.get("toc")
         if toc_id is None:
@@ -1696,7 +1731,7 @@ class ePub(ElementProxy):
         else:
             exclude_files = set(namelist)
             exclude_files.update(
-                joinpath(opf_dir, unquote(item.attrib["href"]))
+                normpath(joinpath(opf_dir, unquote(item.attrib["href"])))
                 for item in fromstring(zfile.read(self._opf_path)).find("{*}manifest")
             )
             namelist.extend(name for name in zfile.NameToInfo if name not in exclude_files)
@@ -1791,7 +1826,7 @@ class ePub(ElementProxy):
             with ZipFile(path, "w", compression, allowZip64, compresslevel) as wfile:
                 write_extra_files(wfile, extra_files)
                 exclude_files.update(
-                    joinpath(opf_dir, unquote(item.attrib["href"]))
+                    normpath(joinpath(opf_dir, unquote(item.attrib["href"])))
                     for item in fromstring(zfile.read(opf_path)).find("{*}manifest")
                 )
                 for name, info in zfile.NameToInfo.items():
