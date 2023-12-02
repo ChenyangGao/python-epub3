@@ -33,7 +33,7 @@ from urllib.parse import quote, unquote
 from zipfile import ZipFile, ZIP_STORED
 
 from .util.file import File, RootFS, TemporaryFS, OPEN_MODES
-from .util.helper import guess_media_type, values, items
+from .util.helper import guess_media_type, values, items, sup
 from .util.proxy import proxy_property, ElementAttribProxy, ElementProxy, NAMESPACES
 from .util.remap import remap_links
 from .util.stream import PyLinq
@@ -858,10 +858,13 @@ class Manifest(dict[str, Item]):
         return self.filter_by_attr("^video/")
 
     @PyLinq.streamify
-    def html_spine_iter(self, /):
-        for id, itemref in book.spine.items():
-            yield book.manifest[id], itemref
-        for item in book.manifest.filter_by_attr(("text/html", "application/xhtml+xml")) :
+    def html_item_ref_pair_iter(self, /):
+        spine = self._epub.spine
+        for id, itemref in spine.items():
+            yield self[id], itemref
+        for item in self.filter_by_attr(("text/html", "application/xhtml+xml")):
+            if item["id"] in spine:
+                continue
             yield item, None
 
     #################### File System Methods #################### 
@@ -892,7 +895,15 @@ class Manifest(dict[str, Item]):
             if generate_id is None:
                 id = uid
             else:
-                id = generate_id(href, self.keys())
+                keys = self.keys()
+                id = generate_id(href, keys)
+                while id in keys:
+                    nid = generate_id(href, keys)
+                    if nid == id:
+                        i = sup(lambda i: f"{i}_{nid}" in keys)
+                        id = f"{i}_{nid}"
+                        break
+                    id = nid
         if id in self:
             raise LookupError(f"id already exists: {id!r}")
         attrib = dict(attrib) if attrib else {}
@@ -924,6 +935,42 @@ class Manifest(dict[str, Item]):
         self._href_to_id[href] = id
         self._href_to_file[href] = file
         return item
+
+    def change(
+        self, 
+        href, 
+        /, 
+        file=None, 
+        fs=None, 
+        open_modes="r", 
+        id=None, 
+        media_type=None, 
+        attrib=None, 
+    ):
+        if fs is self._workfs:
+            raise OSError(errno.EINVAL, f"Remapping the file that in the working fs is not supported, use `rename` instead: {fs!r}")
+        if href in self.href_to_id:
+            item = self[self.href_to_id[href]]
+            if attrib:
+                item.update(attrib)
+            if media_type:
+                item.media_type = media_type
+            try:
+                self.href_to_file[href].remove()
+            except:
+                pass
+            self._href_to_file[href] = File(file, fs, open_modes)
+            return item
+        else:
+            return self.add(
+                href, 
+                file=file, 
+                fs=fs, 
+                open_modes=open_modes, 
+                id=id, 
+                media_type=media_type, 
+                attrib=attrib, 
+            )
 
     def exists(self, href, /):
         if isinstance(href, Item):
@@ -1543,7 +1590,15 @@ class ePub(ElementProxy):
     __optional_keys__ = ("dir", "id", "prefix", "xml:lang")
     __cache_get_key__ = False
 
-    def __init__(self, /, path=None, workroot=None, maketemp=True, generate_id=None):
+    def __init__(
+        self, 
+        /, 
+        path=None, 
+        workroot=None, 
+        maketemp=True, 
+        generate_id=None, 
+        init_opf=None, 
+    ):
         if path and ospath.lexists(path):
             self._zfile = zfile = ZipFile(path)
             contenter_xml = zfile.read("META-INF/container.xml")
@@ -1559,9 +1614,10 @@ class ePub(ElementProxy):
             self._opf_path = "OEBPS/content.opf"
             self._opf_dir = "OEBPS"
             self._opf_name = "content.opf"
-            root = fromstring(b'''\
+            if init_opf is None:
+                content_opf = b'''\
 <?xml version="1.0" encoding="utf-8"?>
-<package version="3.3" unique-identifier="BookId" xmlns="http://www.idpf.org/2007/opf">
+<package version="3.0" unique-identifier="BookId" xmlns="http://www.idpf.org/2007/opf">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
     <dc:identifier id="BookId" opf:scheme="UUID">urn:uuid:%(uuid)s</dc:identifier>
     <dc:language>en</dc:language>
@@ -1572,8 +1628,15 @@ class ePub(ElementProxy):
   <spine />
 </package>''' % {
     b"uuid": bytes(str(uuid4()), "utf-8"), 
-    b"mtime": bytes(datetime.now().strftime("%FT%XZ"), "utf-8"), 
-})
+    b"mtime": bytes(datetime.now().strftime("%FT%XZ"), "utf-8")
+}
+            elif callable(init_opf):
+                content_opf = init_opf()
+            elif isinstance(init_opf, str):
+                content_opf = bytes(init_opf, "utf-8")
+            else:
+                content_opf = init_opf
+            root = fromstring(content_opf)
         super().__init__(root)
         self._path = path
         self._workroot = workroot
@@ -1799,7 +1862,17 @@ class ePub(ElementProxy):
             if bad_ids:
                 root = deepcopy(root)
                 manifest = root.find("{*}manifest")
-                manifest[:] = (item for item in manifest.iterfind("{*}item[@id]") if item._attrib["id"] in good_ids)
+                spine = root.find("{*}spine")
+                for item in reversed([
+                    item for item in manifest.iterfind("{*}item[@id]") 
+                    if item.attrib["id"] in bad_ids
+                ]):
+                    manifest.remove(item)
+                for itemref in reversed([
+                    itemref for itemref in spine.iterfind("{*}itemref[@id]") 
+                    if itemref.attrib["idref"] in bad_ids
+                ]):
+                    spine.remove(itemref)
             wfile.writestr(opf_path, tostring(root, encoding="utf-8", xml_declaration=True))
         zfile = self.__dict__.get("_zfile")
         exclude_files = {joinpath(opf_dir, href) for href in href_to_id}

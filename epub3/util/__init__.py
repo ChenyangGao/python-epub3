@@ -10,6 +10,3 @@ warnings.formatwarning = lambda message, category, filename, lineno, line=None: 
 
 from . import _init_mimetypes
 
-
-
-

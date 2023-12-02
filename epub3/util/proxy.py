@@ -41,6 +41,7 @@ NAMESPACES: Final = {
     "html": "http://www.w3.org/1999/xhtml", 
     "wsdl": "http://schemas.xmlsoap.org/wsdl/", 
     "xhtml": "http://www.w3.org/1999/xhtml", 
+    "xlink": "http://www.w3.org/1999/xlink", 
     "xml": "http://www.w3.org/XML/1998/namespace", 
     "xs": "http://www.w3.org/2001/XMLSchema", 
     "xsi": "http://www.w3.org/2001/XMLSchema-instance", 

@@ -16,6 +16,7 @@ from inspect import isclass, signature, _ParameterKind
 from io import BufferedReader, BufferedWriter, BufferedRandom, TextIOWrapper, DEFAULT_BUFFER_SIZE
 from itertools import permutations, product
 from os import PathLike
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Mapping
 from uuid import uuid4
@@ -96,19 +97,25 @@ class File:
         code, file_open = cls._get_open(fs)
         use_io_open = file_open is io.open
         if file_open is None:
-            code, file_open = cls._get_open(path)
-            if file_open is None:
-                if not isinstance(path, (bytes, str, PathLike)):
-                    raise TypeError("unable to determine how to open the file")
-                file_open = partial(io.open, path)
+            if isinstance(path, Path):
+                file_open = path.open
                 use_io_open = True
+                code = 0
+            else:
+                code, file_open = cls._get_open(path)
+                if file_open is None:
+                    if not isinstance(path, (bytes, str, PathLike)):
+                        raise TypeError("unable to determine how to open the file")
+                    file_open = partial(io.open, path)
+                    use_io_open = True
+                    if code < 0:
+                        code = 0
             use_fs = False
         else:
             file_open = partial(file_open, path)
             use_fs = True
-        _getattr = None
         if code == 0:
-            def _getattr(attr):
+            def _getattr0(attr):
                 try:
                     return getattr(os, attr)
                 except AttributeError:
@@ -117,11 +124,10 @@ class File:
                     except AttributeError:
                         return getattr(shutil, attr)
         elif code == 1:
-            _getattr = partial(getattr, fs if use_fs else path)
+            _getattr0 = partial(getattr, fs if use_fs else path)
         elif code == 2:
-            _getattr = (fs if use_fs else path).__getitem__
-        if _getattr is not None and use_fs:
-            _getattr0 = _getattr
+            _getattr0 = (fs if use_fs else path).__getitem__
+        if use_fs:
             def _getattr(attr, default=undefined, /):
                 try:
                     val = _getattr0(attr)
@@ -134,6 +140,14 @@ class File:
                 if isclass(val) or isinstance(val, staticmethod):
                     return val
                 return partial(val, path)
+        else:
+            def _getattr(attr, default=undefined, /):
+                try:
+                    return _getattr0(attr)
+                except (LookupError, AttributeError):
+                    if default is undefined:
+                        raise
+                    return default
         default_open_modes = _getattr("open_modes", None)
         if default_open_modes is not None:
             open_modes = default_open_modes

@@ -19,8 +19,7 @@ CRE_STYLE_ATTR: Final = re_compile(r'<[^/][^>]*?\sstyle=(?:%s)' % PAT_STRING)
 CRE_STYLE_ELEMENT: Final = re_compile(r'<style(?:\s[^>]*|)>(?P<value>(?s:.+?))</style>')
 LINK_PATTERNS: Final = [
     ("text/css", CRE_CSS_URL), 
-    ("application/x-dtbncx+xml", CRE_REF), 
-    (("text/html", "application/xhtml+xml"), [
+    (("text/html", "$+xml"), [
         CRE_REF, 
         (CRE_STYLE_ATTR, CRE_CSS_URL), 
         (CRE_STYLE_ELEMENT, CRE_CSS_URL)
